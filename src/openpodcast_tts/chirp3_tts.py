@@ -35,7 +35,7 @@ def prepare_text(text: str) -> tuple[str, bool]:
     clean = clean_text_for_tts(text)
     clean = re.sub(r'[,，]\s*', r', <break time="25ms"/> ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
-    return clean
+    return clean, False
     
     # 2. 구두점이 없으면 plain text 그대로
     if not SSML_TRIGGERS.search(clean):
