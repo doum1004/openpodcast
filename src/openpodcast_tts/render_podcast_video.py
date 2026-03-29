@@ -351,7 +351,9 @@ def generate_host_card(
     w, h = size
     pad = 30 if active else 0
     canvas_w = w + pad * 2
-    canvas_h = h + pad * 2
+    # Extra space at bottom for sound waves on active cards
+    wave_space = 30 if active else 0
+    canvas_h = h + pad * 2 + wave_space
 
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
@@ -408,14 +410,15 @@ def generate_host_card(
         anchor="mm",
     )
 
-    # Sound wave bars for active card only
+    # Sound wave bars — well below the card border
     if active:
         bar_w = 4
         bar_gap = 3
         num_bars = 7
         total_bar_w = num_bars * bar_w + (num_bars - 1) * bar_gap
         bar_start_x = cx - total_bar_w // 2
-        bar_base_y = pad + h + 5
+        # 15px gap below the card bottom edge
+        bar_base_y = pad + h + 15 + 20  # card_bottom + gap + max_bar_height
 
         for i in range(num_bars):
             bar_h = 8 + int(12 * abs(math.sin(i * 0.8)))
