@@ -124,6 +124,7 @@ class OpenpodcastTTS:
                 "quality": quality,
                 "total_dialogues": len(self.all_dialogues),
             },
+            "hosts": self.podcast.get("hosts", ""),
             "sections_timeline": [],
             "dialogues_timeline": [],
             "summary": {},
