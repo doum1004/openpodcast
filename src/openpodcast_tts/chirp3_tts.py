@@ -31,7 +31,7 @@ def prepare_text(text: str) -> tuple[str, bool]:
     """
     # 1. Remove parenthetical directives
     clean = clean_text_for_tts(text)
-    clean = re.sub(r'[,，]\s*', r', <break time="25ms"/> ', clean)
+    clean = re.sub(r'[,，]\s*', r'. ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
     return clean, False
 
