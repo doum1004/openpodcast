@@ -1,5 +1,3 @@
-# src/openpodcast_tts/chirp3_tts.py
-
 """
 Chirp 3: HD Voices — Google Cloud Text-to-Speech API
 Completely separate from Gemini API.
@@ -26,83 +24,83 @@ SSML_TRIGGERS = re.compile(r'[,，!！?？.。~…—–\-]|\.{2,}')
 
 def prepare_text(text: str) -> tuple[str, bool]:
     """
-    텍스트 정리 후, SSML이 필요하면 SSML 반환.
-    
+    Clean text and return SSML if needed.
+
     Returns:
         (processed_text, is_ssml)
     """
-    # 1. 괄호 지시어 제거
+    # 1. Remove parenthetical directives
     clean = clean_text_for_tts(text)
     clean = re.sub(r'[,，]\s*', r', <break time="25ms"/> ', clean)
     clean = re.sub(r'\s+', ' ', clean).strip()
     return clean, False
-    
-    # 2. 구두점이 없으면 plain text 그대로
+
+    # 2. If no punctuation, return plain text as-is
     if not SSML_TRIGGERS.search(clean):
         return clean, False
-    
-    # 3. 구두점 있으면 SSML break 삽입
+
+    # 3. If punctuation exists, insert SSML breaks
     ssml = clean
-    
-    # 말줄임표 먼저 (. 치환보다 앞서야 함)
+
+    # Ellipsis first (must precede period replacement)
     ssml = re.sub(r'\.{2,}', r'<break time="60ms"/>', ssml)
     ssml = re.sub(r'…', r'<break time="60ms"/>', ssml)
-    
-    # 마침표
+
+    # Period
     ssml = re.sub(r'\.(\s)', r'.<break time="40ms"/>\1', ssml)
     ssml = re.sub(r'\.$', r'.<break time="40ms"/>', ssml)
-    
-    # 쉼표
+
+    # Comma
     ssml = re.sub(r'[,，]\s*', r', <break time="25ms"/> ', ssml)
-    
-    # 물음표
+
+    # Question mark
     ssml = re.sub(r'[?？]\s*', r'? <break time="35ms"/> ', ssml)
-    
-    # 느낌표
+
+    # Exclamation mark
     ssml = re.sub(r'[!！]\s*', r'! <break time="30ms"/> ', ssml)
-    
-    # 물결표
+
+    # Tilde
     ssml = re.sub(r'~', r'<break time="20ms"/>', ssml)
-    
-    # 대시
+
+    # Dash
     ssml = re.sub(r'\s*[—–\-]{1,2}\s*', r' <break time="30ms"/> ', ssml)
-    
-    # 연속 공백 정리
+
+    # Clean up consecutive spaces
     ssml = re.sub(r'\s+', ' ', ssml).strip()
-    
+
     return f'<speak>{ssml}</speak>', True
 
 def clean_text_for_tts(text: str) -> str:
     """
-    TTS에 보내기 전 텍스트 정리.
-    괄호 안 무음 지시어/이모티콘 제거, 발화 가능한 텍스트만 유지.
-    
-    제거 대상:
-    (잠깐 침묵), (ㅋㅋㅋ), (하하), (웃음), (박수),
-    (한숨), (사이), (비트), (pause), ...
-    
-    유지 대상:
-    괄호 없는 일반 텍스트
+    Clean text before sending to TTS.
+    Remove silent directives/emoticons inside brackets; keep only speakable text.
+
+    Removed:
+    (brief silence), (lol), (haha), (laughter), (applause),
+    (sigh), (pause), (beat), ...
+
+    Kept:
+    Plain text without brackets
     """
-    # 1. 괄호 안 내용 제거: (잠깐 침묵), (ㅋㅋㅋ), (하하하), (웃음) 등
+    # 1. Remove content in parentheses: (brief silence), (lol), (haha), (laughter), etc.
     text = re.sub(r'\([^)]*\)', '', text)
-    
-    # 2. 대괄호 안 내용 제거: [웃음], [박수] 등
+
+    # 2. Remove content in square brackets: [laughter], [applause], etc.
     text = re.sub(r'\[[^\]]*\]', '', text)
-    
-    # 3. 중괄호 안 내용 제거: {효과음} 등
+
+    # 3. Remove content in curly braces: {sound effect}, etc.
     text = re.sub(r'\{[^}]*\}', '', text)
-    
-    # 4. 연속 공백 정리
+
+    # 4. Collapse consecutive whitespace
     text = re.sub(r'\s+', ' ', text)
-    
-    # 5. 앞뒤 공백 제거
+
+    # 5. Strip leading/trailing whitespace
     text = text.strip()
-    
-    # 6. 빈 문자열 방지
+
+    # 6. Prevent empty string
     if not text:
         text = "..."
-    
+
     return text
 
 
@@ -116,39 +114,39 @@ class Chirp3VoiceConfig:
 
 CHIRP3_HD_VOICES = {
     "male": [
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Achird",  "ko-KR", "Achird",  "HD 차분하고 명확한 남성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Algenib", "ko-KR", "Algenib", "HD 깊고 무게감 있는 남성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Algieba", "ko-KR", "Algieba", "HD 따뜻하고 친근한 남성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Alnilam", "ko-KR", "Alnilam", "HD 에너지 넘치는 남성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Schedar", "ko-KR", "Schedar", "HD 부드럽고 안정적인 남성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Zubenelgenubi", "ko-KR", "Zubenelgenubi", "HD 밝고 활기찬 남성"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Achird",  "ko-KR", "Achird",  "HD calm and clear male"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Algenib", "ko-KR", "Algenib", "HD deep and weighty male"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Algieba", "ko-KR", "Algieba", "HD warm and friendly male"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Alnilam", "ko-KR", "Alnilam", "HD energetic male"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Schedar", "ko-KR", "Schedar", "HD soft and stable male"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Zubenelgenubi", "ko-KR", "Zubenelgenubi", "HD bright and lively male"),
     ],
     "female": [
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Achernar",   "ko-KR", "Achernar",   "HD 밝고 또렷한 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Alkes",      "ko-KR", "Alkes",      "HD 부드럽고 따뜻한 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Autonoe",    "ko-KR", "Autonoe",    "HD 차분하고 지적인 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Callirrhoe", "ko-KR", "Callirrhoe", "HD 경쾌하고 활기찬 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Dione",      "ko-KR", "Dione",      "HD 깊고 안정적인 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Erinome",    "ko-KR", "Erinome",    "HD 명확하고 자신감 있는 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Laomedeia",  "ko-KR", "Laomedeia",  "HD 부드럽고 공감적인 여성"),
-        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Sulafat",    "ko-KR", "Sulafat",    "HD 밝고 친근한 여성"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Achernar",   "ko-KR", "Achernar",   "HD bright and articulate female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Alkes",      "ko-KR", "Alkes",      "HD soft and warm female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Autonoe",    "ko-KR", "Autonoe",    "HD calm and intellectual female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Callirrhoe", "ko-KR", "Callirrhoe", "HD cheerful and lively female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Dione",      "ko-KR", "Dione",      "HD deep and stable female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Erinome",    "ko-KR", "Erinome",    "HD clear and confident female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Laomedeia",  "ko-KR", "Laomedeia",  "HD soft and empathetic female"),
+        Chirp3VoiceConfig("ko-KR-Chirp3-HD-Sulafat",    "ko-KR", "Sulafat",    "HD bright and friendly female"),
     ],
 }
 
 CHIRP3_ROLE_PREFERENCE = {
     "male": {
-        "진행자":  ["Achird", "Schedar", "Algieba"],
-        "분석가":  ["Algenib", "Achird", "Schedar"],
-        "토론자":  ["Alnilam", "Zubenelgenubi", "Algenib"],
-        "중재자":  ["Algieba", "Schedar", "Achird"],
-        "default": ["Achird", "Algenib", "Alnilam", "Algieba", "Schedar", "Zubenelgenubi"],
+        "host":     ["Achird", "Schedar", "Algieba"],
+        "analyst":  ["Algenib", "Achird", "Schedar"],
+        "debater":  ["Alnilam", "Zubenelgenubi", "Algenib"],
+        "mediator": ["Algieba", "Schedar", "Achird"],
+        "default":  ["Achird", "Algenib", "Alnilam", "Algieba", "Schedar", "Zubenelgenubi"],
     },
     "female": {
-        "진행자":  ["Autonoe", "Dione", "Achernar"],
-        "분석가":  ["Erinome", "Achernar", "Autonoe"],
-        "토론자":  ["Callirrhoe", "Achernar", "Erinome"],
-        "중재자":  ["Laomedeia", "Alkes", "Dione"],
-        "default": ["Achernar", "Alkes", "Autonoe", "Callirrhoe", "Dione", "Erinome", "Laomedeia", "Sulafat"],
+        "host":     ["Autonoe", "Dione", "Achernar"],
+        "analyst":  ["Erinome", "Achernar", "Autonoe"],
+        "debater":  ["Callirrhoe", "Achernar", "Erinome"],
+        "mediator": ["Laomedeia", "Alkes", "Dione"],
+        "default":  ["Achernar", "Alkes", "Autonoe", "Callirrhoe", "Dione", "Erinome", "Laomedeia", "Sulafat"],
     },
 }
 
@@ -175,7 +173,7 @@ class Chirp3VoiceAssigner:
             name = info.get("name", host_id)
 
             if gender not in CHIRP3_HD_VOICES:
-                raise ValueError(f"지원하지 않는 성별: {gender} ({name})")
+                raise ValueError(f"Unsupported gender: {gender} ({name})")
 
             prefs = CHIRP3_ROLE_PREFERENCE.get(gender, {})
             order = prefs.get(role, prefs.get("default", []))
@@ -202,7 +200,7 @@ class Chirp3VoiceAssigner:
                         break
 
             if not assigned:
-                raise ValueError(f"'{name}'에게 배정할 {gender} HD 음성 부족")
+                raise ValueError(f"Not enough {gender} HD voices to assign to '{name}'")
 
         return self.assignments
 
@@ -212,7 +210,7 @@ class Chirp3VoiceAssigner:
         else:
             hosts_dict = hosts
 
-        print("🎤 음성 배정 결과 [🔊 Chirp 3 HD]:")
+        print("🎤 Voice assignment results [🔊 Chirp 3 HD]:")
         print(f"{'─' * 65}")
         for host_id in sorted(self.assignments.keys()):
             info = hosts_dict[host_id]
@@ -224,12 +222,12 @@ class Chirp3VoiceAssigner:
             )
         print(f"{'─' * 65}")
         names = [v.short_name for v in self.assignments.values()]
-        assert len(names) == len(set(names)), "❌ 음성 중복!"
-        print("  ✅ 중복 없음 확인 완료")
+        assert len(names) == len(set(names)), "❌ Voice duplication detected!"
+        print("  ✅ No duplicates confirmed")
 
 
 class Chirp3AudioCache:
-    """Chirp 3 전용 캐시"""
+    """Chirp 3 dedicated cache"""
 
     def __init__(self, cache_dir: str | Path = "./tts_cache"):
         self.cache_dir = Path(cache_dir) / "chirp3_hd"
@@ -287,8 +285,8 @@ class Chirp3AudioCache:
 
 class Chirp3HDClient:
     """
-    Google Cloud Text-to-Speech Chirp 3 HD 클라이언트
-    
+    Google Cloud Text-to-Speech Chirp 3 HD client
+
     Same interface as GeminiTTSClient:
       .synthesize(text, speaker, emotion, output_path) -> Path | None
       .voice_map: dict[str, config]
@@ -307,10 +305,10 @@ class Chirp3HDClient:
         creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         if not creds:
             raise ValueError(
-                "Chirp 3 HD에는 Google Cloud 인증이 필요합니다.\n"
-                "  1. 서비스 계정 JSON 다운로드\n"
-                "  2. .env에 GOOGLE_APPLICATION_CREDENTIALS=경로 추가\n"
-                "  3. 또는: gcloud auth application-default login"
+                "Chirp 3 HD requires Google Cloud authentication.\n"
+                "  1. Download a service account JSON key\n"
+                "  2. Add GOOGLE_APPLICATION_CREDENTIALS=<path> to .env\n"
+                "  3. Or run: gcloud auth application-default login"
             )
 
         self.client = texttospeech.TextToSpeechClient()
@@ -318,14 +316,14 @@ class Chirp3HDClient:
         self.cache = Chirp3AudioCache(cache_dir=cache_dir)
         self.failed: list[dict] = []
 
-        # 음성 배정
+        # Voice assignment
         self.assigner = Chirp3VoiceAssigner()
         self.voice_map = self.assigner.assign_voices(hosts)
 
         cache_stats = self.cache.stats()
         print(f"☁️  Google Cloud Text-to-Speech (Chirp 3 HD)")
-        print(f"🔐 인증: {Path(creds).name}")
-        print(f"📦 캐시: {cache_stats['entries']}개 항목, {cache_stats['size_mb']}MB")
+        print(f"🔐 Auth: {Path(creds).name}")
+        print(f"📦 Cache: {cache_stats['entries']} entries, {cache_stats['size_mb']}MB")
         self.assigner.print_assignments(hosts)
 
     def synthesize(
@@ -338,23 +336,23 @@ class Chirp3HDClient:
         output_path = Path(output_path)
         voice_cfg = self.voice_map[speaker]
 
-        # 캐시 확인
+        # Check cache
         cached = self.cache.get(text, voice_cfg.voice_name)
         if cached:
             if cached != output_path:
                 shutil.copy2(str(cached), str(output_path))
             key_short = self.cache.make_key(text, voice_cfg.voice_name)[:8]
-            print(f"    ♻️  캐시 재사용: {key_short}...")
+            print(f"    ♻️  Cache hit: {key_short}...")
             return output_path
 
-        # ✅ 텍스트 준비 — 필요할 때만 SSML
+        # Prepare text — use SSML only when needed
         processed, is_ssml = prepare_text(text)
 
         if not processed or processed == "..." or len(processed) < 2:
-            print(f"    ⏭️  빈 텍스트 스킵: '{text[:30]}...'")
+            print(f"    ⏭️  Skipping empty text: '{text[:30]}...'")
             return None
 
-        # ✅ SSML 또는 plain text 선택
+        # Select SSML or plain text
         if is_ssml:
             synthesis_input = texttospeech.SynthesisInput(ssml=processed)
         else:
@@ -381,7 +379,7 @@ class Chirp3HDClient:
                 )
 
                 if not response.audio_content or len(response.audio_content) < 1000:
-                    raise ValueError(f"오디오 데이터 부족 ({len(response.audio_content or b'')}B)")
+                    raise ValueError(f"Insufficient audio data ({len(response.audio_content or b'')}B)")
 
                 with open(output_path, "wb") as f:
                     f.write(response.audio_content)
@@ -397,12 +395,12 @@ class Chirp3HDClient:
                 if is_retryable:
                     wait = min(5 * (2 ** (attempt - 1)), 60) + attempt
                     print(
-                        f"    🔄 Cloud TTS 에러 (시도 {attempt}/{self.MAX_RETRIES}): "
-                        f"{error_str[:80]}. {wait:.0f}초 대기..."
+                        f"    🔄 Cloud TTS error (attempt {attempt}/{self.MAX_RETRIES}): "
+                        f"{error_str[:80]}. Waiting {wait:.0f}s..."
                     )
                     time.sleep(wait)
                 else:
-                    print(f"    ❌ 복구 불가: {e}")
+                    print(f"    ❌ Non-retryable error: {e}")
                     self.failed.append({
                         "text": text, "processed": processed,
                         "is_ssml": is_ssml, "speaker": speaker,
@@ -412,7 +410,7 @@ class Chirp3HDClient:
                     })
                     return None
 
-        print(f"    ❌ {self.MAX_RETRIES}회 재시도 모두 실패. 스킵.")
+        print(f"    ❌ All {self.MAX_RETRIES} retries exhausted. Skipping.")
         self.failed.append({
             "text": text, "processed": processed,
             "is_ssml": is_ssml, "speaker": speaker,
@@ -427,7 +425,7 @@ class Chirp3HDClient:
         if self.failed:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self.failed, f, ensure_ascii=False, indent=2)
-            print(f"\n💾 실패 로그 저장: {path} ({len(self.failed)}건)")
+            print(f"\n💾 Failed log saved: {path} ({len(self.failed)} entries)")
 
     def get_audio_duration_ms(self, wav_path: str | Path) -> int:
         with wave.open(str(wav_path), "rb") as wf:

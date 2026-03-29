@@ -1,7 +1,5 @@
-# src/openpodcast_tts/mixer.py
-
 """
-오디오 믹서 — 끼어들기 겹침 처리 + 최종 믹싱
+Audio mixer — interrupt/overlap handling + final mixdown
 """
 
 import json
@@ -11,7 +9,7 @@ from pathlib import Path
 from pydub import AudioSegment
 
 
-# 끼어들기 타이밍 (밀리초)
+# Interrupt timing (milliseconds)
 INTERRUPT_TIMING = {
     "none":      {"overlap_ms": 0,    "gap_ms": 300},
     "cut_in":    {"overlap_ms": 200,  "gap_ms": 0},
@@ -24,7 +22,7 @@ INTERRUPT_TIMING = {
 
 
 class AudioMixer:
-    """겹침 타임라인 기반 오디오 믹서"""
+    """Overlap timeline-based audio mixer"""
 
     def __init__(self, output_dir: str | Path = "./openpodcast_output"):
         self.output_dir = Path(output_dir)
@@ -36,15 +34,15 @@ class AudioMixer:
         get_duration_fn=None,
     ) -> list[dict]:
         """
-        대사 목록과 오디오 파일로부터 겹침 타임라인 생성
+        Build an overlap timeline from dialogue list and audio files.
 
         Args:
-            dialogues: 전체 대사 리스트
+            dialogues: Full dialogue list
             audio_files: {dialogue_id: wav_path}
-            get_duration_fn: wav_path -> duration_ms 함수
+            get_duration_fn: wav_path -> duration_ms function
 
         Returns:
-            타임라인 리스트
+            Timeline list
         """
         timeline = []
         current_time_ms = 0
@@ -54,18 +52,18 @@ class AudioMixer:
             interrupt = d["interrupt_type"]
             timing = INTERRUPT_TIMING[interrupt]
 
-            # 시작 시간 계산
+            # Calculate start time
             if timing["overlap_ms"] > 0 and current_time_ms > 0:
                 start_time = max(0, current_time_ms - timing["overlap_ms"])
             else:
                 start_time = current_time_ms + timing["gap_ms"]
 
-            # 실제 오디오 길이 또는 추정
+            # Actual audio length or estimate
             wav_path = audio_files.get(d_id)
             if wav_path and get_duration_fn and Path(wav_path).exists():
                 duration_ms = get_duration_fn(wav_path)
             else:
-                # 한국어 기준 대략적 추정: 글자당 ~75ms
+                # Rough estimate for Korean: ~75ms per character
                 duration_ms = len(d["text"]) * 75
 
             timeline.append({
@@ -85,13 +83,13 @@ class AudioMixer:
                 + int(d["pause_after"] * 1000)
             )
 
-        # 타임라인 저장
+        # Save timeline
         timeline_path = self.output_dir / "timeline.json"
         with open(timeline_path, "w", encoding="utf-8") as f:
             json.dump(timeline, f, ensure_ascii=False, indent=2)
 
         total_minutes = current_time_ms / 1000 / 60
-        print(f"\n⏱️  예상 총 길이: {total_minutes:.1f}분")
+        print(f"\n⏱️  Estimated total length: {total_minutes:.1f} min")
 
         return timeline
 
@@ -101,24 +99,24 @@ class AudioMixer:
         output_file: str = "openpodcast_episode.mp3",
     ) -> Path:
         """
-        타임라인 기반 최종 믹싱
+        Final mixdown based on timeline.
 
         Args:
-            timeline: 타임라인 리스트 (None이면 파일에서 로드)
-            output_file: 출력 파일명
+            timeline: Timeline list (loads from file if None)
+            output_file: Output filename
 
         Returns:
-            출력 파일 경로
+            Output file path
         """
         if timeline is None:
             timeline_path = self.output_dir / "timeline.json"
             with open(timeline_path, "r", encoding="utf-8") as f:
                 timeline = json.load(f)
 
-        # 캔버스 길이 계산
+        # Calculate canvas length
         total_ms = max(
             t["start_ms"] + t["duration_ms"] for t in timeline
-        ) + 3000  # 3초 여유
+        ) + 3000  # 3s buffer
 
         canvas = AudioSegment.silent(duration=total_ms)
 
@@ -133,5 +131,5 @@ class AudioMixer:
         output_path = self.output_dir / output_file
         canvas.export(str(output_path), format="mp3", bitrate="192k")
 
-        print(f"🎧 믹싱 완료: {output_path} ({mixed_count}개 클립)")
+        print(f"🎧 Mixing complete: {output_path} ({mixed_count} clips)")
         return output_path

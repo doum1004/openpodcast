@@ -1,5 +1,3 @@
-# src/openpodcast_tts/gemini_tts.py
-
 import hashlib
 import json
 import os
@@ -20,7 +18,6 @@ class EmptyResponseError(Exception):
     pass
 
 
-# ✅ 1. DATACLASS FIRST
 @dataclass
 class GeminiVoiceConfig:
     voice_name: str
@@ -28,39 +25,40 @@ class GeminiVoiceConfig:
     description: str
 
 
-# ✅ 2. THEN USE IT
 AVAILABLE_VOICES = {
     "male": [
-        GeminiVoiceConfig("Kore",    "ko-KR", "차분하고 낮은 남성 음성"),
-        GeminiVoiceConfig("Charon",  "ko-KR", "에너지 넘치는 남성 음성"),
-        GeminiVoiceConfig("Fenrir",  "ko-KR", "깊고 무게감 있는 남성 음성"),
-        GeminiVoiceConfig("Orus",    "ko-KR", "밝고 친근한 남성 음성"),
+        GeminiVoiceConfig("Kore",    "ko-KR", "Calm and low male voice"),
+        GeminiVoiceConfig("Charon",  "ko-KR", "Energetic male voice"),
+        GeminiVoiceConfig("Fenrir",  "ko-KR", "Deep and weighty male voice"),
+        GeminiVoiceConfig("Orus",    "ko-KR", "Bright and friendly male voice"),
     ],
     "female": [
-        GeminiVoiceConfig("Puck",    "ko-KR", "밝고 또렷한 여성 음성"),
-        GeminiVoiceConfig("Aoede",   "ko-KR", "부드럽고 따뜻한 여성 음성"),
-        GeminiVoiceConfig("Leda",    "ko-KR", "차분하고 지적인 여성 음성"),
-        GeminiVoiceConfig("Zephyr",  "ko-KR", "경쾌하고 활기찬 여성 음성"),
+        GeminiVoiceConfig("Puck",    "ko-KR", "Bright and articulate female voice"),
+        GeminiVoiceConfig("Aoede",   "ko-KR", "Soft and warm female voice"),
+        GeminiVoiceConfig("Leda",    "ko-KR", "Calm and intellectual female voice"),
+        GeminiVoiceConfig("Zephyr",  "ko-KR", "Cheerful and lively female voice"),
     ],
 }
 
 ROLE_VOICE_PREFERENCE = {
     "male": {
-        "진행자":  ["Kore", "Orus", "Charon", "Fenrir"],
-        "분석가":  ["Fenrir", "Kore", "Orus", "Charon"],
-        "토론자":  ["Charon", "Fenrir", "Orus", "Kore"],
-        "중재자":  ["Orus", "Kore", "Charon", "Fenrir"],
-        "default": ["Kore", "Charon", "Fenrir", "Orus"],
+        "host":     ["Kore", "Orus", "Charon", "Fenrir"],
+        "analyst":  ["Fenrir", "Kore", "Orus", "Charon"],
+        "debater":  ["Charon", "Fenrir", "Orus", "Kore"],
+        "mediator": ["Orus", "Kore", "Charon", "Fenrir"],
+        "default":  ["Kore", "Charon", "Fenrir", "Orus"],
     },
     "female": {
-        "진행자":  ["Leda", "Aoede", "Puck", "Zephyr"],
-        "분석가":  ["Puck", "Leda", "Zephyr", "Aoede"],
-        "토론자":  ["Zephyr", "Puck", "Leda", "Aoede"],
-        "중재자":  ["Aoede", "Leda", "Puck", "Zephyr"],
-        "default": ["Puck", "Aoede", "Leda", "Zephyr"],
+        "host":     ["Leda", "Aoede", "Puck", "Zephyr"],
+        "analyst":  ["Puck", "Leda", "Zephyr", "Aoede"],
+        "debater":  ["Zephyr", "Puck", "Leda", "Aoede"],
+        "mediator": ["Aoede", "Leda", "Puck", "Zephyr"],
+        "default":  ["Puck", "Aoede", "Leda", "Zephyr"],
     },
 }
 
+# NOTE: These emotion prompts are in Korean because the TTS model generates
+# Korean speech. Keeping them in Korean produces better prosody and expression.
 EMOTION_PROMPTS = {
     "neutral":     "",
     "excited":     "매우 흥분하고 열정적인 톤으로",
@@ -82,6 +80,8 @@ EMOTION_PROMPTS = {
     "teasing":     "놀리는 듯한 장난스러운 톤으로",
 }
 
+# NOTE: HD emotion prompts are in Korean for the same reason — they are
+# instructions to the Korean TTS model for natural prosody.
 EMOTION_PROMPTS_HD = {
     "neutral":     "자연스럽고 편안한 톤으로",
     "excited":     "정말 흥분되어서 목소리가 높아지고 빠르게, 열정이 넘치는 톤으로",
@@ -115,8 +115,8 @@ RETRYABLE_ERRORS = [
 
 class VoiceAssigner:
     """
-    JSON의 hosts 정보를 읽어서 성별에 맞는 음성을 배정.
-    같은 음성이 두 호스트에 배정되지 않도록 보장.
+    Reads host info from JSON and assigns gender-appropriate voices.
+    Guarantees no voice is assigned to more than one host.
     """
 
     def __init__(self):
@@ -125,20 +125,20 @@ class VoiceAssigner:
     def assign_voices(self, hosts: dict | list) -> dict[str, GeminiVoiceConfig]:
         """
         Args:
-            hosts: JSON의 podcast.hosts
-                리스트 형식: [{"id": "host_1", "name": "민수", "gender": "male", ...}, ...]
-                딕셔너리 형식: {"host_1": {"name": "민수", "gender": "male", ...}, ...}
+            hosts: podcast.hosts from JSON
+                List format: [{"id": "host_1", "name": "Alex", "gender": "male", ...}, ...]
+                Dict format: {"host_1": {"name": "Alex", "gender": "male", ...}, ...}
 
         Returns:
             {"host_1": GeminiVoiceConfig(...), ...}
         """
-        # ✅ 리스트 → 딕셔너리 변환
+        # Convert list to dict
         if isinstance(hosts, list):
             hosts_dict = {}
             for h in hosts:
                 host_id = h.get("id")
                 if not host_id:
-                    raise ValueError(f"호스트에 'id' 필드가 없습니다: {h}")
+                    raise ValueError(f"Host is missing 'id' field: {h}")
                 hosts_dict[host_id] = h
         else:
             hosts_dict = hosts
@@ -154,8 +154,8 @@ class VoiceAssigner:
 
             if gender not in AVAILABLE_VOICES:
                 raise ValueError(
-                    f"지원하지 않는 성별: {gender} (host: {name}). "
-                    f"지원: {list(AVAILABLE_VOICES.keys())}"
+                    f"Unsupported gender: {gender} (host: {name}). "
+                    f"Supported: {list(AVAILABLE_VOICES.keys())}"
                 )
 
             preferences = ROLE_VOICE_PREFERENCE.get(gender, {})
@@ -184,20 +184,20 @@ class VoiceAssigner:
 
             if not assigned:
                 raise ValueError(
-                    f"'{name}'에게 배정할 {gender} 음성이 부족합니다."
+                    f"Not enough {gender} voices to assign to '{name}'."
                 )
 
         return self.assignments
 
     def print_assignments(self, hosts: dict | list):
-        """배정 결과 출력"""
-        # ✅ 리스트 → 딕셔너리 변환
+        """Print assignment results"""
+        # Convert list to dict
         if isinstance(hosts, list):
             hosts_dict = {h["id"]: h for h in hosts}
         else:
             hosts_dict = hosts
 
-        print("🎤 음성 배정 결과:")
+        print("🎤 Voice assignment results:")
         print(f"{'─' * 55}")
         for host_id in sorted(self.assignments.keys()):
             host_info = hosts_dict[host_id]
@@ -210,31 +210,8 @@ class VoiceAssigner:
         print(f"{'─' * 55}")
 
         voice_names = [v.voice_name for v in self.assignments.values()]
-        assert len(voice_names) == len(set(voice_names)), "❌ 음성 중복 발견!"
-        print("  ✅ 중복 없음 확인 완료")
-
-    def print_assignments(self, hosts):
-        """배정 결과 출력"""
-        if isinstance(hosts, list):
-            hosts_dict = {h["id"]: h for h in hosts}
-        else:
-            hosts_dict = hosts
-
-        print("🎤 음성 배정 결과:")
-        print(f"{'─' * 55}")
-        for host_id in sorted(self.assignments.keys()):
-            host_info = hosts_dict[host_id]
-            voice = self.assignments[host_id]
-            gender_emoji = "👨" if host_info.get("gender") == "male" else "👩"
-            print(
-                f"  {gender_emoji} {host_info['name']:4s} ({host_info.get('role', '?'):4s}) "
-                f"→ {voice.voice_name:8s} | {voice.description}"
-            )
-        print(f"{'─' * 55}")
-
-        voice_names = [v.voice_name for v in self.assignments.values()]
-        assert len(voice_names) == len(set(voice_names)), "❌ 음성 중복 발견!"
-        print("  ✅ 중복 없음 확인 완료")
+        assert len(voice_names) == len(set(voice_names)), "❌ Voice duplication detected!"
+        print("  ✅ No duplicates confirmed")
 
 
 # ============================================
@@ -259,7 +236,7 @@ class AudioCache:
             json.dump(self.index, f, ensure_ascii=False, indent=2)
 
     def make_key(self, text: str, voice_name: str, emotion: str, quality: str) -> str:
-        """텍스트 + 실제 음성 이름 + 감정 + 품질로 해시"""
+        """Hash from text + actual voice name + emotion + quality"""
         content = f"{quality}|{voice_name}|{emotion}|{text}"
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
@@ -318,7 +295,7 @@ class RateLimiter:
             oldest = self.request_times[0]
             wait_time = 60.0 - (now - oldest) + 1.0
             if wait_time > 0:
-                print(f"    ⏳ 분당 제한 도달. {wait_time:.1f}초 대기중...")
+                print(f"    ⏳ Per-minute limit reached. Waiting {wait_time:.1f}s...")
                 time.sleep(wait_time)
         if self.request_times:
             elapsed = time.time() - self.request_times[-1]
@@ -352,18 +329,18 @@ class GeminiTTSClient:
     ):
         """
         Args:
-            hosts: JSON의 podcast.hosts 딕셔너리
-            api_key: Google AI API 키
-            cache_dir: 캐시 디렉토리
+            hosts: podcast.hosts dict from JSON
+            api_key: Google AI API key
+            cache_dir: Cache directory
             quality: "standard" or "hd"
         """
         resolved_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not resolved_key:
             raise ValueError(
-                "API 키를 찾을 수 없습니다.\n"
-                "  1. .env 파일에 GOOGLE_API_KEY=... 추가\n"
-                "  2. export GOOGLE_API_KEY=... 실행\n"
-                "  3. GeminiTTSClient(api_key='...') 직접 전달"
+                "API key not found.\n"
+                "  1. Add GOOGLE_API_KEY=... to your .env file\n"
+                "  2. Run: export GOOGLE_API_KEY=...\n"
+                "  3. Pass directly: GeminiTTSClient(api_key='...')"
             )
 
         self.quality = quality or os.getenv("TTS_QUALITY", "standard")
@@ -375,31 +352,31 @@ class GeminiTTSClient:
         self.cache = AudioCache(cache_dir=cache_dir)
         self.failed: list[dict] = []
 
-        # ✅ 성별 기반 음성 자동 배정
+        # Gender-based automatic voice assignment
         self.assigner = VoiceAssigner()
         self.voice_map = self.assigner.assign_voices(hosts)
 
         cache_stats = self.cache.stats()
-        print(f"🔑 API 키 로드 완료 (끝 4자리: ...{resolved_key[-4:]})")
-        print(f"🎚️  음질: {'HD' if self.quality == 'hd' else 'Standard'}")
-        print(f"🤖 모델: {self.model}")
+        print(f"🔑 API key loaded (last 4: ...{resolved_key[-4:]})")
+        print(f"🎚️  Quality: {'HD' if self.quality == 'hd' else 'Standard'}")
+        print(f"🤖 Model: {self.model}")
         print(
-            f"📦 캐시: {cache_stats['entries']}개 항목, "
+            f"📦 Cache: {cache_stats['entries']} entries, "
             f"{cache_stats['size_mb']}MB"
         )
         self.assigner.print_assignments(hosts)
 
     def _get_voice(self, speaker: str) -> GeminiVoiceConfig:
-        """호스트 ID로 배정된 음성 반환"""
+        """Return the assigned voice for a host ID"""
         if speaker not in self.voice_map:
             raise ValueError(
-                f"알 수 없는 화자: {speaker}. "
-                f"등록된 화자: {list(self.voice_map.keys())}"
+                f"Unknown speaker: {speaker}. "
+                f"Registered speakers: {list(self.voice_map.keys())}"
             )
         return self.voice_map[speaker]
 
     def _get_host_info(self, speaker: str) -> dict:
-        """호스트 정보 조회 (리스트/딕셔너리 모두 지원)"""
+        """Look up host info (supports both list and dict)"""
         if isinstance(self.hosts, list):
             for h in self.hosts:
                 if h.get("id") == speaker:
@@ -409,6 +386,11 @@ class GeminiTTSClient:
             return self.hosts.get(speaker, {})
 
     def _build_prompt(self, text: str, speaker: str, emotion: str) -> str:
+        """
+        Build TTS prompt.
+        NOTE: Prompt text is in Korean because the TTS model generates Korean speech.
+        Korean prompts produce better prosody and emotional expression.
+        """
         host_info = self._get_host_info(speaker)
         name = host_info.get("name", speaker)
 
@@ -421,7 +403,7 @@ class GeminiTTSClient:
 
             parts = []
 
-            # 캐릭터 설정
+            # Character description
             char_desc = f"당신은 '{name}'입니다. {gender_word} {role}."
             if debate_style:
                 char_desc += f" 토론 스타일: {debate_style}."
@@ -431,7 +413,7 @@ class GeminiTTSClient:
                 char_desc += f" {personality}"
             parts.append(char_desc)
 
-            # 감정
+            # Emotion
             emotion_instruction = EMOTION_PROMPTS_HD.get(emotion, "")
             if emotion_instruction:
                 parts.append(f"다음 대사를 {emotion_instruction} 말하세요.")
@@ -454,16 +436,16 @@ class GeminiTTSClient:
         output_path = Path(output_path)
         voice_cfg = self._get_voice(speaker)
 
-        # 1. 캐시 확인 (실제 voice_name 기반)
+        # 1. Check cache (based on actual voice_name)
         cached = self.cache.get(text, voice_cfg.voice_name, emotion, self.quality)
         if cached:
             if cached != output_path:
                 shutil.copy2(str(cached), str(output_path))
             key_short = self.cache.make_key(text, voice_cfg.voice_name, emotion, self.quality)[:8]
-            print(f"    ♻️  캐시 재사용: {key_short}...")
+            print(f"    ♻️  Cache hit: {key_short}...")
             return output_path
 
-        # 2. 프롬프트 구성
+        # 2. Build prompt
         prompt = self._build_prompt(text, speaker, emotion)
 
         last_error = None
@@ -487,7 +469,7 @@ class GeminiTTSClient:
                     ),
                 )
 
-                # 응답 검증
+                # Validate response
                 if (
                     not response.candidates
                     or not response.candidates[0].content
@@ -495,7 +477,7 @@ class GeminiTTSClient:
                     or not response.candidates[0].content.parts[0].inline_data
                     or not response.candidates[0].content.parts[0].inline_data.data
                 ):
-                    raise EmptyResponseError("빈 응답 수신")
+                    raise EmptyResponseError("Empty response received")
 
                 audio_data = (
                     response.candidates[0]
@@ -504,7 +486,7 @@ class GeminiTTSClient:
                 )
 
                 if len(audio_data) < 1000:
-                    raise EmptyResponseError(f"오디오 너무 작음 ({len(audio_data)}B)")
+                    raise EmptyResponseError(f"Audio too small ({len(audio_data)}B)")
 
                 self._save_wav(audio_data, output_path)
                 self.cache.put(text, voice_cfg.voice_name, emotion, self.quality, output_path)
@@ -514,9 +496,9 @@ class GeminiTTSClient:
                 last_error = e
                 wait = min(5 * (2 ** (attempt - 1)), 60) + attempt
                 print(
-                    f"    🔄 빈/파싱 에러 (시도 {attempt}/"
+                    f"    🔄 Empty/parse error (attempt {attempt}/"
                     f"{self.rate_limiter.max_retries}): {e}. "
-                    f"{wait:.0f}초 대기..."
+                    f"Waiting {wait:.0f}s..."
                 )
                 time.sleep(wait)
 
@@ -531,17 +513,17 @@ class GeminiTTSClient:
                         error_type = "429 Rate Limit"
                     else:
                         base_delay = min(10 * (2 ** (attempt - 1)), 120)
-                        error_type = "서버 에러"
+                        error_type = "Server error"
 
                     wait = base_delay + attempt
                     print(
-                        f"    🔄 {error_type} (시도 {attempt}/"
+                        f"    🔄 {error_type} (attempt {attempt}/"
                         f"{self.rate_limiter.max_retries}). "
-                        f"{wait:.0f}초 대기..."
+                        f"Waiting {wait:.0f}s..."
                     )
                     time.sleep(wait)
                 else:
-                    print(f"    ❌ 복구 불가: {e}")
+                    print(f"    ❌ Non-retryable error: {e}")
                     self.failed.append({
                         "text": text, "speaker": speaker,
                         "voice_name": voice_cfg.voice_name,
@@ -551,7 +533,7 @@ class GeminiTTSClient:
                     })
                     return None
 
-        print(f"    ❌ {self.rate_limiter.max_retries}회 재시도 모두 실패. 스킵.")
+        print(f"    ❌ All {self.rate_limiter.max_retries} retries exhausted. Skipping.")
         self.failed.append({
             "text": text, "speaker": speaker,
             "voice_name": voice_cfg.voice_name,
@@ -566,7 +548,7 @@ class GeminiTTSClient:
         if self.failed:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self.failed, f, ensure_ascii=False, indent=2)
-            print(f"\n💾 실패 로그 저장: {path} ({len(self.failed)}건)")
+            print(f"\n💾 Failed log saved: {path} ({len(self.failed)} entries)")
 
     def _save_wav(self, pcm_data: bytes, path: Path):
         with wave.open(str(path), "wb") as wf:
