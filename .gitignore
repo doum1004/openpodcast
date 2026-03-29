@@ -14,7 +14,6 @@ envs
 .env
 .env.*
 !.env.example
-openpodcast_output/
 
 samples/
 output/

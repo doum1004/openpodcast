@@ -41,11 +41,12 @@ class OpenpodcastTTS:
     def __init__(
         self,
         json_path: str,
-        output_dir: str = "./openpodcast_output",
+        output_dir: str = "./output",
         api_key: str | None = None,
         quality: str = "standard",
     ):
-        self.output_dir = Path(output_dir)
+        json_path_base_name = Path(json_path).stem
+        self.output_dir = Path(output_dir) / json_path_base_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         with open(json_path, "r", encoding="utf-8") as f:
@@ -68,8 +69,9 @@ class OpenpodcastTTS:
             hosts=self.hosts,
             api_key=api_key,
             quality=quality,
+            cache_dir=os.path.join(self.output_dir, "tts_cache")
         )
-        self.mixer = AudioMixer(output_dir=output_dir)
+        self.mixer = AudioMixer(output_dir=self.output_dir)
 
     def _get_host_info(self, speaker: str) -> dict:
         if isinstance(self.hosts, list):
@@ -158,7 +160,7 @@ class OpenpodcastTTS:
         return audio_files
 
     def retry_failed(self) -> dict[int, str]:
-        failed_path = Path("./tts_cache/failed.json")
+        failed_path = self.output_dir / "tts_cache" / "failed.json"
         if not failed_path.exists():
             print("✅ No failure log found. All succeeded!")
             return {}
@@ -245,7 +247,7 @@ def main():
     parser = argparse.ArgumentParser(description="Openpodcast TTS Pipeline")
     parser.add_argument("json_path", help="Path to episode JSON file")
     parser.add_argument("-o", "--output", default="openpodcast_episode.mp3")
-    parser.add_argument("-d", "--output-dir", default="./openpodcast_output")
+    parser.add_argument("-d", "--output-dir", default="./output")
     parser.add_argument("-k", "--api-key", default=None,
                         help="API key (Google for standard/hd)")
     parser.add_argument(

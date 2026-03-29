@@ -24,7 +24,7 @@ INTERRUPT_TIMING = {
 class AudioMixer:
     """Overlap timeline-based audio mixer"""
 
-    def __init__(self, output_dir: str | Path = "./openpodcast_output"):
+    def __init__(self, output_dir: str | Path = "./output"):
         self.output_dir = Path(output_dir)
 
     def build_timeline(
