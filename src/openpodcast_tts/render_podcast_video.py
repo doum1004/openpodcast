@@ -23,11 +23,29 @@ import os
 import subprocess
 import sys
 import textwrap
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+def clean_display_text(text: str) -> str:
+    """
+    Remove parenthesized stage directions from display text.
+    Examples:
+        "(잠깐 침묵)" → removed
+        "(웃음)" → removed
+        "(한숨)" → removed
+    Handles both () and （） full-width parentheses.
+    """
+    # Remove (content) — half-width
+    text = re.sub(r'\([^)]*\)', '', text)
+    # Remove （content） — full-width
+    text = re.sub(r'（[^）]*）', '', text)
+    # Clean up leftover double spaces and leading/trailing whitespace
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
 
 # ══════════════════════════════════════════════════════════════
 #  CONFIGURATION
@@ -524,10 +542,7 @@ def generate_ass_subtitles(
 ):
     """
     Generate ASS subtitle file.
-    
-    - Section titles are NOT in ASS (handled by FFmpeg drawtext at top).
-    - Speaker name sits well above text with enough margin for 2-line wraps.
-    - No emotion displayed.
+    Subtitle text only — no speaker name displayed.
     """
 
     font_name = Path(font_path).stem if os.path.exists(font_path) else "Arial"
@@ -592,27 +607,10 @@ def generate_ass_subtitles(
     all_segments.sort(key=lambda s: (s.start_ms, s.position_index))
 
     white = rgb_to_ass_color(255, 255, 255)
-    gray = rgb_to_ass_color(180, 180, 180)
-
-    # ── LAYOUT MARGINS ──
-    # Key fix: large gap between name and text so 2-line text doesn't overlap
-    #
-    # From bottom of screen:
-    #   solo_text_margin  = 80   (subtitle text, can be 2 lines ~100px tall)
-    #   solo_name_margin  = 195  (speaker name, well above even 2-line text)
-    #
-    # Calculation:
-    #   font 42 * 2 lines ≈ 100px + line spacing ≈ 110px
-    #   80 (base) + 110 (text height) + 5 (gap) = 195
 
     solo_text_v = 80
-    solo_name_v = 200  # enough room for 2 lines of size-42 text
-
     overlap_text_v = 80
-    overlap_name_v = 185  # 2 lines of size-34
-
-    stack_text_margins = [80, 170, 260, 350]
-    stack_name_offsets = 90  # gap above each stack text
+    stack_text_margins = [80, 160, 240, 320]
 
     header = f"""[Script Info]
 Title: Podcast Video Subtitles
@@ -625,19 +623,12 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Solo,{font_name},42,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,3,2,2,100,100,{solo_text_v},1
-Style: SoloName,{font_name},26,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{solo_name_v},1
 Style: OverlapL,{font_name},34,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,1,100,{VIDEO_WIDTH // 2 + 20},{overlap_text_v},1
-Style: OverlapLName,{font_name},20,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,1,1,1,100,{VIDEO_WIDTH // 2 + 20},{overlap_name_v},1
 Style: OverlapR,{font_name},34,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,3,{VIDEO_WIDTH // 2 + 20},100,{overlap_text_v},1
-Style: OverlapRName,{font_name},20,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,1,1,3,{VIDEO_WIDTH // 2 + 20},100,{overlap_name_v},1
 Style: Stack0,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[0]},1
-Style: Stack0Name,{font_name},18,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,1,1,2,100,100,{stack_text_margins[0] + stack_name_offsets},1
 Style: Stack1,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[1]},1
-Style: Stack1Name,{font_name},18,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,1,1,2,100,100,{stack_text_margins[1] + stack_name_offsets},1
 Style: Stack2,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[2]},1
-Style: Stack2Name,{font_name},18,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,1,1,2,100,100,{stack_text_margins[2] + stack_name_offsets},1
 Style: Stack3,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[3]},1
-Style: Stack3Name,{font_name},18,{gray},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,1,1,2,100,100,{stack_text_margins[3] + stack_name_offsets},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -656,38 +647,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             ass_color = white
 
-        max_chars = 120 if seg.total_concurrent == 1 else (80 if seg.total_concurrent == 2 else 50)
-        display_text = escape_ass_text(evt.text)
-        if len(evt.text) > max_chars:
-            display_text = escape_ass_text(evt.text[:max_chars] + "...")
+        cleaned_text = clean_display_text(evt.text)
 
-        # Speaker label — name only
-        speaker_label = evt.name
-        if evt.interrupt_type and evt.interrupt_type != "none":
-            interrupt_label = get_interrupt_label(evt.interrupt_type)
-            if interrupt_label:
-                speaker_label += f" ({interrupt_label})"
+        max_chars = 120 if seg.total_concurrent == 1 else (80 if seg.total_concurrent == 2 else 50)
+        if len(cleaned_text) > max_chars:
+            display_text = escape_ass_text(cleaned_text[:max_chars] + "...")
+        else:
+            display_text = escape_ass_text(cleaned_text)
+
+        if not display_text.strip():
+            continue
 
         if seg.total_concurrent == 1:
             dialogue_lines.append(
-                f"Dialogue: 1,{start},{end},SoloName,,0,0,0,,"
-                f"{{\\c{ass_color}}}{escape_ass_text(speaker_label)}"
-            )
-            dialogue_lines.append(
                 f"Dialogue: 0,{start},{end},Solo,,0,0,0,,"
-                f"{display_text}"
+                f"{{\\c{ass_color}}}{display_text}"
             )
 
         elif seg.total_concurrent == 2:
-            if seg.position_index == 0:
-                style, name_style = "OverlapL", "OverlapLName"
-            else:
-                style, name_style = "OverlapR", "OverlapRName"
-
-            dialogue_lines.append(
-                f"Dialogue: 1,{start},{end},{name_style},,0,0,0,,"
-                f"{{\\c{ass_color}}}{escape_ass_text(speaker_label)}"
-            )
+            style = "OverlapL" if seg.position_index == 0 else "OverlapR"
             dialogue_lines.append(
                 f"Dialogue: 0,{start},{end},{style},,0,0,0,,"
                 f"{{\\c{ass_color}}}{display_text}"
@@ -696,12 +674,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             idx = min(seg.position_index, 3)
             style = f"Stack{idx}"
-            name_style = f"Stack{idx}Name"
-
-            dialogue_lines.append(
-                f"Dialogue: 1,{start},{end},{name_style},,0,0,0,,"
-                f"{{\\c{ass_color}}}{escape_ass_text(speaker_label)}"
-            )
             dialogue_lines.append(
                 f"Dialogue: 0,{start},{end},{style},,0,0,0,,"
                 f"{{\\c{ass_color}}}{display_text}"
