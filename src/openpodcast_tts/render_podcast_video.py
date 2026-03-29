@@ -55,7 +55,7 @@ VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 FPS = 30
 CARD_W = 280
-CARD_H = 170  # Slightly shorter since no label
+CARD_H = 150  # Slightly shorter since no label
 MARGIN = 80
 BG_COLOR = "#1a1a2e"
 
@@ -85,6 +85,7 @@ class HostInfo:
     name: str
     color_hex: str
     color_rgb: tuple
+    image_path: str = ""  # original image from JSON
     position: tuple = (0, 0)
     card_normal_path: str = ""
     card_active_path: str = ""
@@ -146,7 +147,7 @@ def find_font_path() -> str:
 
 
 # ══════════════════════════════════════════════════════════════
-#  PARSING
+#  PARSING — use hosts array from JSON
 # ══════════════════════════════════════════════════════════════
 
 
@@ -159,20 +160,55 @@ def parse_podcast_json(json_path: str):
 
     base_dir = str(json_path.parent)
 
-    # ── Hosts ──
+    # ── Hosts — prefer "hosts" array, fallback to analysis ──
     hosts: dict[str, HostInfo] = {}
-    dist = data.get("analysis", {}).get("dialogue_distribution", {})
-    # Inside parse_podcast_json, where hosts are built:
-    for key, info in dist.items():
-        c = HOST_COLORS.get(key, HOST_COLORS["host_1"])
-        hosts[key] = HostInfo(
-            key=key,
-            name=info["name"],
-            color_hex=c["hex"],
-            color_rgb=c["rgb"],
-        )
 
-    # Fallback from dialogues
+    hosts_array = data.get("hosts", [])
+    if hosts_array:
+        for h in hosts_array:
+            key = h["id"]
+            c = HOST_COLORS.get(key, HOST_COLORS["host_1"])
+
+            # Resolve image path
+            image_path = h.get("image", "")
+            if image_path:
+                image_path = image_path.replace("\\", os.sep)
+                if not os.path.isabs(image_path):
+                    # Try relative to JSON dir
+                    candidate = os.path.join(base_dir, os.path.basename(image_path))
+                    if os.path.exists(candidate):
+                        image_path = candidate
+                    else:
+                        candidate = str(Path(json_path).parent.parent / image_path)
+                        if os.path.exists(candidate):
+                            image_path = candidate
+                        else:
+                            # Try from project root
+                            candidate = str(Path.cwd() / image_path.replace("\\", os.sep))
+                            if os.path.exists(candidate):
+                                image_path = candidate
+
+            hosts[key] = HostInfo(
+                key=key,
+                name=h["name"],
+                color_hex=c["hex"],
+                color_rgb=c["rgb"],
+                image_path=image_path,
+            )
+            print(f"    👤 {h['name']} ({key}): image={'✅' if os.path.exists(image_path) else '❌'} {image_path}")
+    else:
+        # Fallback: from analysis.dialogue_distribution
+        dist = data.get("analysis", {}).get("dialogue_distribution", {})
+        for key, info in dist.items():
+            c = HOST_COLORS.get(key, HOST_COLORS["host_1"])
+            hosts[key] = HostInfo(
+                key=key,
+                name=info["name"],
+                color_hex=c["hex"],
+                color_rgb=c["rgb"],
+            )
+
+    # Fallback: from dialogues
     if not hosts:
         for d in data.get("dialogues_timeline", []):
             key = d["speaker"]
@@ -183,21 +219,6 @@ def parse_podcast_json(json_path: str):
                     name=d["name"],
                     color_hex=c["hex"],
                     color_rgb=c["rgb"],
-                )
-
-
-    # If analysis is missing, infer from dialogues
-    if not hosts:
-        for d in data.get("dialogues_timeline", []):
-            key = d["speaker"]
-            if key not in hosts:
-                c = HOST_COLORS.get(key, HOST_COLORS["host_1"])
-                hosts[key] = HostInfo(
-                    key=key,
-                    name=d["name"],
-                    color_hex=c["hex"],
-                    color_rgb=c["rgb"],
-                    label=c["label"],
                 )
 
     # ── Section map ──
@@ -231,26 +252,21 @@ def parse_podcast_json(json_path: str):
             overlap_ms=d.get("audio_overlap_ms", 0),
         ))
 
-    # Sort by start time
     events.sort(key=lambda e: (e.start_ms, e.dialogue_id))
 
     # ── Audio path ──
     mix_path = data.get("mix", {}).get("output_file", "")
     if mix_path:
-        # Normalize Windows backslashes from JSON
         mix_path = mix_path.replace("\\", os.sep)
-
-        # Try as-is first
         if not os.path.isabs(mix_path) or not os.path.exists(mix_path):
-            # Try relative to JSON directory
             candidate = os.path.join(base_dir, os.path.basename(mix_path))
             if os.path.exists(candidate):
                 mix_path = candidate
             else:
-                # Try the full relative path from JSON dir
-                candidate = os.path.join(base_dir, mix_path)
+                candidate = str(Path.cwd() / mix_path.replace("\\", os.sep))
                 if os.path.exists(candidate):
                     mix_path = candidate
+
     total_duration_ms = data.get("summary", {}).get("total_audio_duration_ms", 0)
     if not total_duration_ms and events:
         total_duration_ms = max(e.end_ms for e in events)
@@ -355,8 +371,45 @@ def calculate_positions(hosts: dict[str, HostInfo]):
 
 
 # ══════════════════════════════════════════════════════════════
-#  HOST CARD IMAGE GENERATION — NO LABEL
+#  HOST CARD GENERATION — uses host image if available
 # ══════════════════════════════════════════════════════════════
+
+
+def make_circle_mask(size: int) -> Image.Image:
+    """Create a circular alpha mask."""
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse([(0, 0), (size - 1, size - 1)], fill=255)
+    return mask
+
+
+def load_host_avatar(image_path: str, size: int = 70) -> Optional[Image.Image]:
+    """Load and crop host image into a circle."""
+    if not image_path or not os.path.exists(image_path):
+        return None
+
+    try:
+        img = Image.open(image_path).convert("RGBA")
+
+        # Crop to square from center
+        w, h = img.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+
+        # Resize to target
+        img = img.resize((size, size), Image.LANCZOS)
+
+        # Apply circular mask
+        mask = make_circle_mask(size)
+        output = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        output.paste(img, (0, 0), mask)
+
+        return output
+    except Exception as e:
+        print(f"    ⚠️  Failed to load avatar {image_path}: {e}")
+        return None
 
 
 def generate_host_card(
@@ -365,12 +418,11 @@ def generate_host_card(
     output_path: str,
     size: tuple = (CARD_W, CARD_H),
 ):
-    """Generate a PNG host card. No label, just avatar + name."""
+    """Generate a PNG host card with photo avatar or initial letter."""
     w, h = size
     pad = 30 if active else 0
-    canvas_w = w + pad * 2
-    # Extra space at bottom for sound waves on active cards
     wave_space = 30 if active else 0
+    canvas_w = w + pad * 2
     canvas_h = h + pad * 2 + wave_space
 
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -401,42 +453,59 @@ def generate_host_card(
         width=border_width,
     )
 
-    # Avatar circle
+    # Avatar — try photo first, fallback to colored circle with initial
     cx = pad + w // 2
     cy = pad + 60
-    r = 35
-    avatar_fill = host.color_rgb + (255,) if active else host.color_rgb + (160,)
-    draw.ellipse(
-        [(cx - r, cy - r), (cx + r, cy + r)],
-        fill=avatar_fill,
-        outline=(255, 255, 255, 200) if active else (255, 255, 255, 80),
-        width=2,
-    )
+    avatar_size = 70
+    r = avatar_size // 2
 
-    # Initial letter
-    font_initial = find_font(36)
-    draw.text((cx, cy), host.name[0], fill="white", font=font_initial, anchor="mm")
+    avatar_img = load_host_avatar(host.image_path, avatar_size)
+
+    if avatar_img:
+        # Paste photo avatar
+        ax = cx - r
+        ay = cy - r
+        img.paste(avatar_img, (ax, ay), avatar_img)
+
+        # Draw circle border around photo
+        draw = ImageDraw.Draw(img)  # refresh draw after paste
+        border_col = host.color_rgb + (255,) if active else (255, 255, 255, 120)
+        draw.ellipse(
+            [(cx - r - 2, cy - r - 2), (cx + r + 2, cy + r + 2)],
+            outline=border_col,
+            width=3 if active else 2,
+        )
+    else:
+        # Fallback: colored circle with initial letter
+        avatar_fill = host.color_rgb + (255,) if active else host.color_rgb + (160,)
+        draw.ellipse(
+            [(cx - r, cy - r), (cx + r, cy + r)],
+            fill=avatar_fill,
+            outline=(255, 255, 255, 200) if active else (255, 255, 255, 80),
+            width=2,
+        )
+        font_initial = find_font(36)
+        draw.text((cx, cy), host.name[0], fill="white", font=font_initial, anchor="mm")
 
     # Host name
-    font_name = find_font(24)
+    font_name = find_font(22)
     name_color = "white" if active else (200, 200, 200, 200)
     draw.text(
-        (pad + w // 2, pad + 120),
+        (pad + w // 2, pad + 115),
         host.name,
         fill=name_color,
         font=font_name,
         anchor="mm",
     )
 
-    # Sound wave bars — well below the card border
+    # Sound wave bars for active card
     if active:
         bar_w = 4
         bar_gap = 3
         num_bars = 7
         total_bar_w = num_bars * bar_w + (num_bars - 1) * bar_gap
         bar_start_x = cx - total_bar_w // 2
-        # 15px gap below the card bottom edge
-        bar_base_y = pad + h + 15 + 20  # card_bottom + gap + max_bar_height
+        bar_base_y = pad + h + 15 + 20
 
         for i in range(num_bars):
             bar_h = 8 + int(12 * abs(math.sin(i * 0.8)))
@@ -495,11 +564,15 @@ def rgb_to_ass_color(r: int, g: int, b: int, a: int = 0) -> str:
 
 
 def escape_ass_text(text: str) -> str:
-    """Escape special characters for ASS subtitle format."""
+    """Escape special characters for ASS subtitle format.
+    Preserves \\N line breaks."""
+    # Temporarily replace our line breaks
+    text = text.replace("\\N", "\x00LINEBREAK\x00")
     text = text.replace("\\", "\\\\")
     text = text.replace("{", "\\{")
     text = text.replace("}", "\\}")
-    text = text.replace("\n", "\\N")
+    # Restore line breaks
+    text = text.replace("\x00LINEBREAK\x00", "\\N")
     return text
 
 
@@ -527,12 +600,135 @@ def get_interrupt_label(itype: str) -> str:
     }
     return labels.get(itype, "")
 
+# ══════════════════════════════════════════════════════════════
+#  BACKGROUND IMAGE HANDLING
+# ══════════════════════════════════════════════════════════════
+
+
+def resolve_background_image(bg_value: str, base_dir: str) -> Optional[str]:
+    """
+    Resolve background_image from JSON.
+    Could be:
+      - A file path (relative or absolute)
+      - A name that matches a file in the output dir
+      - None/empty
+    """
+    if not bg_value:
+        return None
+
+    # Common image extensions to try
+    extensions = ["", ".png", ".jpg", ".jpeg", ".webp"]
+
+    # Search locations
+    search_dirs = [
+        base_dir,
+        os.path.join(base_dir, ".."),
+        str(Path.cwd()),
+        str(Path.cwd() / "assets"),
+        str(Path.cwd() / "images"),
+    ]
+
+    for search_dir in search_dirs:
+        for ext in extensions:
+            candidate = os.path.join(search_dir, bg_value + ext)
+            candidate = candidate.replace("\\", os.sep)
+            if os.path.exists(candidate):
+                return str(Path(candidate).resolve())
+
+    # Try as direct path
+    direct = bg_value.replace("\\", os.sep)
+    if os.path.exists(direct):
+        return str(Path(direct).resolve())
+
+    return None
+
+
+def prepare_background_image(
+    image_path: str,
+    output_path: str,
+    width: int = VIDEO_WIDTH,
+    height: int = VIDEO_HEIGHT,
+    darken: float = 0.4,
+) -> str:
+    """
+    Resize and darken background image to fit video dimensions.
+    Returns path to the prepared image.
+    """
+    try:
+        img = Image.open(image_path).convert("RGBA")
+
+        # Resize to cover (maintain aspect ratio, crop to fill)
+        img_ratio = img.width / img.height
+        target_ratio = width / height
+
+        if img_ratio > target_ratio:
+            # Image is wider — fit height, crop width
+            new_h = height
+            new_w = int(height * img_ratio)
+        else:
+            # Image is taller — fit width, crop height
+            new_w = width
+            new_h = int(width / img_ratio)
+
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # Center crop
+        left = (new_w - width) // 2
+        top = (new_h - height) // 2
+        img = img.crop((left, top, left + width, top + height))
+
+        # Darken overlay for readability
+        dark_overlay = Image.new("RGBA", (width, height), (0, 0, 0, int(255 * darken)))
+        img = Image.alpha_composite(img, dark_overlay)
+
+        # Convert to RGB (FFmpeg input)
+        img = img.convert("RGB")
+        img.save(output_path, "PNG")
+
+        return output_path
+
+    except Exception as e:
+        print(f"    ⚠️  Failed to prepare background: {e}")
+        return ""
 
 # ══════════════════════════════════════════════════════════════
 #  ASS SUBTITLES — REMOVED SECTION (handled by FFmpeg drawtext)
 #  FIXED: speaker name no longer overlaps multi-line text
 # ══════════════════════════════════════════════════════════════
+def format_subtitle_text(text: str, max_lines: int = 3, chars_per_line: int = 50) -> str:
+    """
+    Break text into lines and cap at max_lines.
+    Uses char count to estimate line breaks since ASS wraps automatically
+    but we want to control it explicitly.
+    """
+    if not text:
+        return text
 
+    # Split into chunks of chars_per_line
+    lines = []
+    while text:
+        if len(text) <= chars_per_line:
+            lines.append(text)
+            break
+        # Find a good break point (space or punctuation)
+        break_at = chars_per_line
+        # Look for space/punctuation near the limit
+        for i in range(chars_per_line, max(chars_per_line - 10, 0), -1):
+            if i < len(text) and text[i] in " ,，.。!！?？、":
+                break_at = i + 1
+                break
+        lines.append(text[:break_at].rstrip())
+        text = text[break_at:].lstrip()
+
+    # Cap at max_lines
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        # Add ellipsis to last line
+        lines[-1] = lines[-1].rstrip()
+        if not lines[-1].endswith("..."):
+            lines[-1] += "..."
+
+    return "\\N".join(lines)
 
 def generate_ass_subtitles(
     events: list[DialogueEvent],
@@ -647,24 +843,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             ass_color = white
 
+        # Clean stage directions
         cleaned_text = clean_display_text(evt.text)
 
-        max_chars = 120 if seg.total_concurrent == 1 else (80 if seg.total_concurrent == 2 else 50)
-        if len(cleaned_text) > max_chars:
-            display_text = escape_ass_text(cleaned_text[:max_chars] + "...")
-        else:
-            display_text = escape_ass_text(cleaned_text)
-
-        if not display_text.strip():
+        if not cleaned_text.strip():
             continue
 
+        # Format with line breaks and max line cap
         if seg.total_concurrent == 1:
+            # Solo: 3 lines, ~30 chars each
+            display_text = format_subtitle_text(cleaned_text)
+            display_text = escape_ass_text(display_text)
+
             dialogue_lines.append(
                 f"Dialogue: 0,{start},{end},Solo,,0,0,0,,"
                 f"{{\\c{ass_color}}}{display_text}"
             )
 
         elif seg.total_concurrent == 2:
+            # Overlap: 3 lines, ~20 chars each (narrower)
+            display_text = format_subtitle_text(cleaned_text)
+            display_text = escape_ass_text(display_text)
+
             style = "OverlapL" if seg.position_index == 0 else "OverlapR"
             dialogue_lines.append(
                 f"Dialogue: 0,{start},{end},{style},,0,0,0,,"
@@ -672,6 +872,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
         else:
+            # Stacked: 2 lines, ~25 chars each
+            display_text = format_subtitle_text(cleaned_text)
+            display_text = escape_ass_text(display_text)
+
             idx = min(seg.position_index, 3)
             style = f"Stack{idx}"
             dialogue_lines.append(
@@ -706,15 +910,11 @@ def build_ffmpeg_command(
     font_path: str,
     title: str = "",
     heat_level: str = "",
+    background_image: str = "",
 ):
     """
     Build FFmpeg command.
-    
-    Layout from top to bottom:
-      y=20   : Main title (drawtext)
-      y=65   : Section title (drawtext, changes per section)
-      corners: Host cards (overlay with enable)
-      bottom : Subtitles (ASS)
+    Uses background image if provided, otherwise solid color.
     """
 
     total_duration_sec = total_duration_ms / 1000.0
@@ -724,10 +924,19 @@ def build_ffmpeg_command(
     input_map = {}
     idx = 0
 
+    # [0] Audio
     inputs.append(audio_path)
     audio_idx = idx
     idx += 1
 
+    # [1] Background image (optional)
+    bg_input_idx = None
+    if background_image and os.path.exists(background_image):
+        inputs.append(background_image)
+        bg_input_idx = idx
+        idx += 1
+
+    # Host card images
     for key, host in hosts.items():
         inputs.append(host.card_normal_path)
         input_map[f"{key}_normal"] = idx
@@ -746,13 +955,11 @@ def build_ffmpeg_command(
     else:
         fontfile_opt = ""
 
-    # ── Helper to escape drawtext strings ──
     def dt_escape(text: str) -> str:
-        """Escape text for FFmpeg drawtext filter."""
         return (
             text
             .replace("\\", "\\\\")
-            .replace("'", "\u2019")   # replace apostrophe with unicode
+            .replace("'", "\u2019")
             .replace(":", "\\:")
             .replace("%", "%%")
         )
@@ -760,12 +967,25 @@ def build_ffmpeg_command(
     # ── Build filter_complex ──
     filters = []
 
-    # Background
-    filters.append(
-        f"color=c={BG_COLOR}:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}"
-        f":d={total_duration_sec:.3f}:r={FPS}"
-        f"[bg]"
-    )
+    # Background — image or solid color
+    if bg_input_idx is not None:
+        # Loop the image for the duration, scale to exact size
+        filters.append(
+            f"[{bg_input_idx}:v]loop=loop=-1:size=1"
+            f",setpts=N/{FPS}/TB"
+            f",scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}"
+            f",trim=duration={total_duration_sec:.3f}"
+            f",setpts=PTS-STARTPTS"
+            f",fps={FPS}"
+            f"[bg]"
+        )
+    else:
+        # Solid color fallback
+        filters.append(
+            f"color=c={BG_COLOR}:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}"
+            f":d={total_duration_sec:.3f}:r={FPS}"
+            f"[bg]"
+        )
 
     # Main title — y=20
     safe_title = dt_escape(title)
@@ -780,7 +1000,7 @@ def build_ffmpeg_command(
 
     current_label = "bg_t"
 
-    # Section titles — y=65, each enabled during its time range
+    # Section titles — y=65
     for i, sec in enumerate(sections):
         s = sec.start_ms / 1000.0
         e = sec.end_ms / 1000.0
@@ -817,7 +1037,6 @@ def build_ffmpeg_command(
             active_enable = "0"
             not_active_enable = "1"
 
-        # Normal card
         next_label = f"n{key[-1]}"
         filters.append(
             f"[{current_label}][{normal_idx}:v]overlay="
@@ -827,7 +1046,6 @@ def build_ffmpeg_command(
         )
         current_label = next_label
 
-        # Active card
         glow_pad = 30
         next_label = f"a{key[-1]}"
         filters.append(
@@ -968,7 +1186,10 @@ def render_podcast_video(json_path: str, output_video: str = ""):
 
     print(f"  🎙️  {title}")
     print(f"  🔥 {heat_level}")
-    print(f"  👥 Hosts: {', '.join(h.name for h in hosts.values())}")
+    print(f"  👥 Hosts:")
+    for key, host in hosts.items():
+        img_status = "📷" if host.image_path and os.path.exists(host.image_path) else "🔤"
+        print(f"     {img_status} {host.name} [{key}]")
     print(f"  📝 Dialogues: {len(events)}")
     print(f"  📌 Sections: {len(sections)}")
     print(f"  ⏱️  Duration: {total_duration_ms / 1000:.1f}s")
@@ -995,13 +1216,38 @@ def render_podcast_video(json_path: str, output_video: str = ""):
     print(f"\n🎨 Generating host cards → {temp_dir}")
     generate_all_host_cards(hosts, temp_dir)
 
-    # ── 5. Generate ASS subtitles (NO sections — handled by FFmpeg) ──
+    # ── 5. Prepare background image ──
+    bg_image_value = podcast_info.get("background_image", "")
+    bg_prepared_path = ""
+
+    if bg_image_value:
+        print(f"\n🖼️  Background image: {bg_image_value}")
+        bg_source = resolve_background_image(bg_image_value, base_dir)
+
+        if bg_source:
+            print(f"  📁 Found: {bg_source}")
+            bg_prepared_path = os.path.join(temp_dir, "background.png")
+            bg_prepared_path = prepare_background_image(
+                bg_source,
+                bg_prepared_path,
+                VIDEO_WIDTH,
+                VIDEO_HEIGHT,
+                darken=0.4,
+            )
+            if bg_prepared_path:
+                print(f"  ✅ Prepared: {bg_prepared_path}")
+            else:
+                print(f"  ⚠️  Failed to prepare, using solid color")
+        else:
+            print(f"  ⚠️  Not found, using solid color fallback")
+
+    # ── 6. Generate ASS subtitles ──
     font_path = find_font_path()
     ass_path = os.path.join(temp_dir, "subtitles.ass")
     print(f"\n📝 Generating ASS subtitles...")
     generate_ass_subtitles(events, hosts, ass_path, font_path)
 
-    # ── 6. Ensure audio exists ──
+    # ── 7. Ensure audio exists ──
     print(f"\n🎧 Audio: {audio_path}")
     if not audio_path or not os.path.exists(audio_path):
         print("  ⚠️  Mixed audio not found, attempting to build from WAVs...")
@@ -1013,7 +1259,7 @@ def render_podcast_video(json_path: str, output_video: str = ""):
             print("  ❌ Cannot proceed without audio!")
             return None
 
-    # ── 7. Build FFmpeg command ──
+    # ── 8. Build FFmpeg command ──
     if not output_video:
         output_video = os.path.join(base_dir, "podcast_video.mp4")
 
@@ -1021,7 +1267,7 @@ def render_podcast_video(json_path: str, output_video: str = ""):
     cmd_list = build_ffmpeg_command(
         hosts=hosts,
         events=events,
-        sections=sections,       # <-- passed to FFmpeg drawtext
+        sections=sections,
         audio_path=audio_path,
         ass_path=ass_path,
         total_duration_ms=total_duration_ms,
@@ -1029,6 +1275,7 @@ def render_podcast_video(json_path: str, output_video: str = ""):
         font_path=font_path,
         title=title,
         heat_level=heat_level,
+        background_image=bg_prepared_path,
     )
 
     # Save command for debugging
@@ -1039,7 +1286,7 @@ def render_podcast_video(json_path: str, output_video: str = ""):
             f.write(f"  [{i}] {part}\n")
     print(f"  💾 Command saved: {cmd_path}")
 
-    # ── 8. Execute FFmpeg ──
+    # ── 9. Execute FFmpeg ──
     print(f"\n🚀 Rendering video → {output_video}")
     print(f"   This may take a while...")
 
