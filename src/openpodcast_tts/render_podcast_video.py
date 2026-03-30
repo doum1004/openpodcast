@@ -344,22 +344,24 @@ def calculate_positions(hosts: dict[str, HostInfo]):
     """Assign corner positions based on host count."""
     n = len(hosts)
 
+    TOP_OFFSET = VIDEO_HEIGHT * 0.1
+
     corners = {
         1: [
-            (MARGIN, MARGIN),
+            (MARGIN, MARGIN + TOP_OFFSET),
         ],
         2: [
-            (MARGIN, MARGIN),
-            (VIDEO_WIDTH - MARGIN - CARD_W, MARGIN),
+            (MARGIN, MARGIN + TOP_OFFSET),
+            (VIDEO_WIDTH - MARGIN - CARD_W, MARGIN + TOP_OFFSET),
         ],
         3: [
-            (MARGIN, MARGIN),
-            (VIDEO_WIDTH - MARGIN - CARD_W, MARGIN),
+            (MARGIN, MARGIN + TOP_OFFSET),
+            (VIDEO_WIDTH - MARGIN - CARD_W, MARGIN + TOP_OFFSET),
             (VIDEO_WIDTH // 2 - CARD_W // 2, VIDEO_HEIGHT - MARGIN - CARD_H - 200),
         ],
         4: [
-            (MARGIN, MARGIN),
-            (VIDEO_WIDTH - MARGIN - CARD_W, MARGIN),
+            (MARGIN, MARGIN + TOP_OFFSET),
+            (VIDEO_WIDTH - MARGIN - CARD_W, MARGIN + TOP_OFFSET),
             (MARGIN, VIDEO_HEIGHT - MARGIN - CARD_H - 200),
             (VIDEO_WIDTH - MARGIN - CARD_W, VIDEO_HEIGHT - MARGIN - CARD_H - 200),
         ],
