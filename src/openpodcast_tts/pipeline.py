@@ -86,6 +86,7 @@ class OpenpodcastTTS:
         quality: str = "standard",
     ):
         json_path_base_name = Path(json_path).stem
+        self.json_dir = Path(json_path).parent
         self.output_dir = Path(output_dir) / json_path_base_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -103,6 +104,14 @@ class OpenpodcastTTS:
                 self.all_dialogues.append(d)
 
         self.quality = quality
+
+        # Resolve intro/outro music paths relative to JSON file location
+        self.intro_music_path = self._resolve_music_path(
+            self.podcast.get("intro_music")
+        )
+        self.outro_music_path = self._resolve_music_path(
+            self.podcast.get("outro_music")
+        )
 
         # Use different client based on quality/engine
         self.tts = create_tts_client(
@@ -124,6 +133,8 @@ class OpenpodcastTTS:
                 "engine": ENGINE_LABELS.get(quality, quality),
                 "quality": quality,
                 "total_dialogues": len(self.all_dialogues),
+                "intro_music": str(self.intro_music_path) if self.intro_music_path else None,
+                "outro_music": str(self.outro_music_path) if self.outro_music_path else None,
             },
             "hosts": self.podcast.get("hosts", ""),
             "sections_timeline": [],
@@ -131,6 +142,37 @@ class OpenpodcastTTS:
             "summary": {},
             "console_output": [],
         }
+
+    def _resolve_music_path(self, music_filename: str | None) -> Path | None:
+        """Resolve a music filename to a full path.
+
+        Searches in order:
+        1. As an absolute path or relative to CWD
+        2. Relative to the JSON file's directory
+        3. Relative to the output directory
+        """
+        if not music_filename:
+            return None
+
+        candidate = Path(music_filename)
+        if candidate.is_absolute() and candidate.exists():
+            return candidate
+
+        # Relative to CWD
+        if candidate.exists():
+            return candidate.resolve()
+
+        # Relative to JSON directory
+        json_relative = self.json_dir / music_filename
+        if json_relative.exists():
+            return json_relative.resolve()
+
+        # Relative to output directory
+        output_relative = self.output_dir / music_filename
+        if output_relative.exists():
+            return output_relative.resolve()
+
+        return None
 
     def _log(self, *args, **kwargs):
         """Print and capture simultaneously."""
@@ -157,6 +199,22 @@ class OpenpodcastTTS:
         self._log(f"🔥 Heat Level: {self.podcast['heat_level']}")
         self._log(f"🎚️  Engine: {engine_label}")
         self._log(f"📝 Total dialogues: {len(self.all_dialogues)}")
+
+        # Log music info
+        if self.intro_music_path:
+            self._log(f"🎵 Intro music: {self.intro_music_path.name} (overlaps with dialogue id:1)")
+        else:
+            intro_cfg = self.podcast.get("intro_music")
+            if intro_cfg:
+                self._log(f"⚠️  Intro music configured as '{intro_cfg}' but file not found")
+
+        if self.outro_music_path:
+            self._log(f"🎵 Outro music: {self.outro_music_path.name} (appended at end)")
+        else:
+            outro_cfg = self.podcast.get("outro_music")
+            if outro_cfg:
+                self._log(f"⚠️  Outro music configured as '{outro_cfg}' but file not found")
+
         self._log("=" * 60)
 
         audio_files: dict[int, str] = {}
@@ -434,17 +492,216 @@ class OpenpodcastTTS:
                     script["audio_overlap_ms"] = info["overlap_ms"]
 
         return timeline
-
+    
     def mix_audio(self, timeline=None, output_file="openpodcast_episode.mp3") -> Path:
         mix_start = time.time()
+
+        # First, do the normal dialogue mix
         result = self.mixer.mix(timeline=timeline, output_file=output_file)
+
+        if not result:
+            self.output_report["mix"] = {
+                "output_file": None,
+                "mix_duration_sec": round(time.time() - mix_start, 3),
+                "intro_music": None,
+                "outro_music": None,
+            }
+            return result
+
+        needs_reexport = False
+        music_lead_in_ms = 0
+
+        try:
+            from pydub import AudioSegment
+
+            mixed = AudioSegment.from_file(str(result))
+
+            # ============================================================
+            # INTRO FLOW:
+            #   0:00        → Music starts at full volume
+            #   0:05        → Music ducks down (volume drop)
+            #   0:05        → ID:1 speech begins (over ducked music)
+            #   ID:1 ends   → Music fades out completely
+            #   ID:2 starts → Clean speech, no music
+            # ============================================================
+            if self.intro_music_path and self.intro_music_path.exists():
+                intro_music_raw = AudioSegment.from_file(str(self.intro_music_path))
+
+                MUSIC_SOLO_MS = 10000       # 10s music plays alone at full volume
+                DUCK_DB = -14              # how much to lower music under speech
+                DUCK_FADE_MS = 800         # fade duration into ducked level
+                MUSIC_FADEOUT_MS = 2000    # fade-out duration after ID:1 ends
+
+                # --- Find ID:1 and ID:2 positions from timeline ---
+                id1_duration_ms = 0
+                for entry in timeline or []:
+                    if entry.get("id") == 1:
+                        id1_duration_ms = entry.get("duration_ms", 0)
+                        break
+
+                # Shift ALL dialogue audio forward by MUSIC_SOLO_MS
+                music_lead_in_ms = MUSIC_SOLO_MS
+                lead_in_silence = AudioSegment.silent(duration=music_lead_in_ms)
+                mixed = lead_in_silence + mixed
+
+                # Update all timeline offsets in output report
+                for d_record in self.output_report.get("dialogues_timeline", []):
+                    if d_record.get("audio_start_ms") is not None:
+                        d_record["audio_start_ms"] += music_lead_in_ms
+                        d_record["audio_end_ms"] += music_lead_in_ms
+
+                for sec_record in self.output_report.get("sections_timeline", []):
+                    if sec_record.get("audio_start_ms") is not None:
+                        sec_record["audio_start_ms"] += music_lead_in_ms
+                        sec_record["audio_end_ms"] += music_lead_in_ms
+                    for script in sec_record.get("scripts", []):
+                        if script.get("audio_start_ms") is not None:
+                            script["audio_start_ms"] += music_lead_in_ms
+                            script["audio_end_ms"] += music_lead_in_ms
+
+                for entry in self.output_report.get("audio_timeline", []):
+                    if entry.get("start_ms") is not None:
+                        entry["start_ms"] += music_lead_in_ms
+                        entry["end_ms"] += music_lead_in_ms
+
+                # --- Build the intro music track with volume automation ---
+                # Total music length: solo + ID:1 speech + fade-out
+                total_intro_music_ms = MUSIC_SOLO_MS + id1_duration_ms + MUSIC_FADEOUT_MS
+
+                # Trim or loop the raw music to fit
+                if len(intro_music_raw) < total_intro_music_ms:
+                    # Loop if too short
+                    loops_needed = (total_intro_music_ms // len(intro_music_raw)) + 1
+                    intro_music_raw = intro_music_raw * loops_needed
+                intro_music_full = intro_music_raw[:total_intro_music_ms]
+
+                # Part 1: Full volume solo section (0 → MUSIC_SOLO_MS)
+                part_solo = intro_music_full[:MUSIC_SOLO_MS]
+
+                # Part 2: Ducked section under ID:1 speech
+                duck_section_ms = id1_duration_ms
+                part_ducked_raw = intro_music_full[MUSIC_SOLO_MS:MUSIC_SOLO_MS + duck_section_ms]
+                if len(part_ducked_raw) > 0:
+                    # Apply duck: fade down at start, stay ducked
+                    part_ducked = part_ducked_raw + DUCK_DB
+                    # Smooth transition: crossfade from full to ducked
+                    if len(part_ducked) > DUCK_FADE_MS:
+                        fade_in_portion = part_ducked_raw[:DUCK_FADE_MS].fade(
+                            from_gain=0, to_gain=DUCK_DB, start=0, duration=DUCK_FADE_MS
+                        )
+                        rest_portion = part_ducked_raw[DUCK_FADE_MS:] + DUCK_DB
+                        part_ducked = fade_in_portion + rest_portion
+                else:
+                    part_ducked = AudioSegment.silent(duration=0)
+
+                # Part 3: Fade-out section after ID:1 ends
+                part_fadeout_raw = intro_music_full[MUSIC_SOLO_MS + duck_section_ms:]
+                if len(part_fadeout_raw) > 0:
+                    part_fadeout = (part_fadeout_raw + DUCK_DB).fade_out(len(part_fadeout_raw))
+                else:
+                    part_fadeout = AudioSegment.silent(duration=0)
+
+                # Combine all parts
+                intro_music_shaped = part_solo + part_ducked + part_fadeout
+
+                # Extend canvas if needed
+                if len(intro_music_shaped) > len(mixed):
+                    pad = AudioSegment.silent(duration=len(intro_music_shaped) - len(mixed))
+                    mixed = mixed + pad
+
+                # Overlay intro music starting at position 0
+                mixed = mixed.overlay(intro_music_shaped, position=0)
+                needs_reexport = True
+
+                id1_start = music_lead_in_ms
+                id1_end = music_lead_in_ms + id1_duration_ms
+                music_end = len(intro_music_shaped)
+
+                self._log(f"  🎵 Intro music flow:")
+                self._log(f"     {_fmt_ms(0)} → {_fmt_ms(MUSIC_SOLO_MS)}  "
+                        f"Music solo (full volume)")
+                self._log(f"     {_fmt_ms(MUSIC_SOLO_MS)} → duck transition ({DUCK_FADE_MS}ms, {DUCK_DB}dB)")
+                self._log(f"     {_fmt_ms(id1_start)} → {_fmt_ms(id1_end)}  "
+                        f"ID:1 speech (music ducked underneath)")
+                self._log(f"     {_fmt_ms(id1_end)} → {_fmt_ms(music_end)}  "
+                        f"Music fade-out ({MUSIC_FADEOUT_MS}ms)")
+                self._log(f"     {_fmt_ms(id1_end)} → ID:2 starts (clean, no music)")
+
+            # ============================================================
+            # OUTRO FLOW:
+            #   Final sentence ends
+            #   → 0ms silence
+            #   → Music fades in (starts quiet, rises to full)
+            #   → Plays at full volume
+            #   → Fades out to silence
+            # ============================================================
+            if self.outro_music_path and self.outro_music_path.exists():
+                outro_music_raw = AudioSegment.from_file(str(self.outro_music_path))
+
+                OUTRO_GAP_MS = 0         # silence after last dialogue
+                OUTRO_FADE_IN_MS = 2000    # fade-in duration (quiet → full)
+                OUTRO_FADE_OUT_MS = 3000   # fade-out duration at the end
+
+                # Apply fade-in at start and fade-out at end
+                outro_music = outro_music_raw
+                if len(outro_music) > OUTRO_FADE_IN_MS:
+                    outro_music = outro_music.fade_in(OUTRO_FADE_IN_MS)
+                else:
+                    outro_music = outro_music.fade_in(len(outro_music))
+
+                if len(outro_music) > OUTRO_FADE_OUT_MS:
+                    outro_music = outro_music.fade_out(OUTRO_FADE_OUT_MS)
+                else:
+                    outro_music = outro_music.fade_out(len(outro_music))
+
+                gap = AudioSegment.silent(duration=OUTRO_GAP_MS)
+                outro_start_ms = len(mixed) + OUTRO_GAP_MS
+
+                mixed = mixed + gap + outro_music
+                needs_reexport = True
+
+                outro_end_ms = len(mixed)
+                self._log(f"  🎵 Outro music flow:")
+                self._log(f"     {_fmt_ms(outro_start_ms - OUTRO_GAP_MS)} → "
+                        f"{_fmt_ms(outro_start_ms)}  Silence gap ({OUTRO_GAP_MS}ms)")
+                self._log(f"     {_fmt_ms(outro_start_ms)} → "
+                        f"{_fmt_ms(outro_start_ms + OUTRO_FADE_IN_MS)}  "
+                        f"Fade in ({OUTRO_FADE_IN_MS}ms)")
+                self._log(f"     {_fmt_ms(outro_end_ms - OUTRO_FADE_OUT_MS)} → "
+                        f"{_fmt_ms(outro_end_ms)}  "
+                        f"Fade out ({OUTRO_FADE_OUT_MS}ms)")
+                self._log(f"     Total outro: {_fmt_ms(len(outro_music))}")
+
+            # Re-export if we added music
+            if needs_reexport:
+                ext = Path(output_file).suffix.lower().lstrip(".")
+                export_format = ext if ext in ("mp3", "wav", "ogg", "flac") else "mp3"
+                export_params = {}
+                if export_format == "mp3":
+                    export_params["bitrate"] = "192k"
+
+                mixed.export(str(result), format=export_format, **export_params)
+                self._log(f"  ✅ Re-exported with music: {result}")
+                self._log(f"  🎧 Final duration: {_fmt_ms(len(mixed))}")
+
+        except ImportError:
+            self._log("  ⚠️  pydub not available — skipping music overlay")
+        except Exception as e:
+            self._log(f"  ⚠️  Music mixing failed: {e}")
+            import traceback
+            self._log(f"     {traceback.format_exc()}")
+
         mix_end = time.time()
 
         self.output_report["mix"] = {
             "output_file": str(result) if result else None,
             "mix_duration_sec": round(mix_end - mix_start, 3),
+            "intro_music": str(self.intro_music_path) if self.intro_music_path else None,
+            "outro_music": str(self.outro_music_path) if self.outro_music_path else None,
+            "music_lead_in_ms": music_lead_in_ms,
         }
         return result
+
 
     def print_analysis(self):
         meta = self.podcast["metadata"]
@@ -550,13 +807,28 @@ class OpenpodcastTTS:
                     f"({round(a_dur / 1000, 2)}s){overlap_tag}"
                 )
 
+        # Account for outro music in total duration
+        outro_duration_ms = 0
+        if self.outro_music_path:
+            try:
+                outro_duration_ms = self.tts.get_audio_duration_ms(str(self.outro_music_path))
+                self._log(f"\n🎵 Outro music duration: {_fmt_ms(outro_duration_ms)} ({round(outro_duration_ms / 1000, 2)}s)")
+            except Exception:
+                pass
+
+        total_with_outro = total_audio_duration_ms + outro_duration_ms
+
         # Total episode duration
-        if total_audio_duration_ms > 0:
-            total_sec = round(total_audio_duration_ms / 1000, 2)
-            total_min = round(total_audio_duration_ms / 60000, 2)
-            self._log(f"\n🎧 Total episode audio: {_fmt_ms(total_audio_duration_ms)} ({total_sec}s / {total_min}min)")
-            self.output_report["summary"]["total_audio_duration_ms"] = total_audio_duration_ms
+        if total_with_outro > 0:
+            total_sec = round(total_with_outro / 1000, 2)
+            total_min = round(total_with_outro / 60000, 2)
+            self._log(f"\n🎧 Total episode audio: {_fmt_ms(total_with_outro)} ({total_sec}s / {total_min}min)")
+            if outro_duration_ms > 0:
+                self._log(f"   (dialogue: {_fmt_ms(total_audio_duration_ms)} + outro: {_fmt_ms(outro_duration_ms)})")
+            self.output_report["summary"]["total_audio_duration_ms"] = total_with_outro
             self.output_report["summary"]["total_audio_duration_sec"] = total_sec
+            self.output_report["summary"]["dialogue_audio_duration_ms"] = total_audio_duration_ms
+            self.output_report["summary"]["outro_music_duration_ms"] = outro_duration_ms
 
         # Save sections timeline text file
         self._save_sections_txt()
