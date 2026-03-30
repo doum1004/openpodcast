@@ -120,6 +120,7 @@ class OpenpodcastTTS:
                 "show_name": self.podcast.get("show_name", ""),
                 "title": self.podcast.get("title", ""),
                 "heat_level": self.podcast.get("heat_level", ""),
+                "background_image": self.podcast.get("background_image", ""),
                 "engine": ENGINE_LABELS.get(quality, quality),
                 "quality": quality,
                 "total_dialogues": len(self.all_dialogues),
