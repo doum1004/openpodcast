@@ -54,10 +54,13 @@ def clean_display_text(text: str) -> str:
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 FPS = 30
-CARD_W = 280
-CARD_H = 150  # Slightly shorter since no label
+CARD_W = 320
+CARD_H = 280  # Taller to fit larger avatar + name + wave inside
 MARGIN = 80
 BG_COLOR = "#1a1a2e"
+
+# Avatar size: 2.5x the original 70px
+AVATAR_SIZE = 175
 
 FONT_PATHS = [
     "NanumGothicBold.ttf",
@@ -383,7 +386,7 @@ def make_circle_mask(size: int) -> Image.Image:
     return mask
 
 
-def load_host_avatar(image_path: str, size: int = 70) -> Optional[Image.Image]:
+def load_host_avatar(image_path: str, size: int = AVATAR_SIZE) -> Optional[Image.Image]:
     """Load and crop host image into a circle."""
     if not image_path or not os.path.exists(image_path):
         return None
@@ -418,12 +421,18 @@ def generate_host_card(
     output_path: str,
     size: tuple = (CARD_W, CARD_H),
 ):
-    """Generate a PNG host card with photo avatar or initial letter."""
+    """
+    Generate a PNG host card with photo avatar or initial letter.
+    
+    Layout (all inside the card box):
+      - Large circular avatar (175px, 2.5x original)
+      - Host name below avatar (no overlap)
+      - Sound wave bars below name (active only, inside card)
+    """
     w, h = size
     pad = 30 if active else 0
-    wave_space = 30 if active else 0
     canvas_w = w + pad * 2
-    canvas_h = h + pad * 2 + wave_space
+    canvas_h = h + pad * 2
 
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
@@ -453,25 +462,47 @@ def generate_host_card(
         width=border_width,
     )
 
-    # Avatar — try photo first, fallback to colored circle with initial
-    cx = pad + w // 2
-    cy = pad + 60
-    avatar_size = 70
+    # ── Layout calculations ──
+    # Vertical spacing inside card:
+    #   top_padding -> avatar -> gap -> name -> gap -> wave (active) -> bottom_padding
+    avatar_size = AVATAR_SIZE
     r = avatar_size // 2
 
+    top_padding = 20
+    avatar_name_gap = 12
+    name_wave_gap = 10
+    wave_height = 24  # max bar height for wave
+
+    # Center X of the card content area
+    cx = pad + w // 2
+
+    # Avatar center Y
+    avatar_cy = pad + top_padding + r
+
+    # Name Y (top of text, anchored at middle-center)
+    font_name = find_font(24)
+    name_y = avatar_cy + r + avatar_name_gap
+
+    # Wave base Y (active only)
+    # Measure name text height for proper positioning
+    name_bbox = font_name.getbbox(host.name)
+    name_text_h = name_bbox[3] - name_bbox[1] if name_bbox else 24
+    wave_base_y = name_y + name_text_h + name_wave_gap + wave_height
+
+    # ── Draw avatar ──
     avatar_img = load_host_avatar(host.image_path, avatar_size)
 
     if avatar_img:
         # Paste photo avatar
         ax = cx - r
-        ay = cy - r
+        ay = avatar_cy - r
         img.paste(avatar_img, (ax, ay), avatar_img)
 
         # Draw circle border around photo
         draw = ImageDraw.Draw(img)  # refresh draw after paste
         border_col = host.color_rgb + (255,) if active else (255, 255, 255, 120)
         draw.ellipse(
-            [(cx - r - 2, cy - r - 2), (cx + r + 2, cy + r + 2)],
+            [(cx - r - 2, avatar_cy - r - 2), (cx + r + 2, avatar_cy + r + 2)],
             outline=border_col,
             width=3 if active else 2,
         )
@@ -479,39 +510,38 @@ def generate_host_card(
         # Fallback: colored circle with initial letter
         avatar_fill = host.color_rgb + (255,) if active else host.color_rgb + (160,)
         draw.ellipse(
-            [(cx - r, cy - r), (cx + r, cy + r)],
+            [(cx - r, avatar_cy - r), (cx + r, avatar_cy + r)],
             fill=avatar_fill,
             outline=(255, 255, 255, 200) if active else (255, 255, 255, 80),
             width=2,
         )
-        font_initial = find_font(36)
-        draw.text((cx, cy), host.name[0], fill="white", font=font_initial, anchor="mm")
+        font_initial = find_font(72)
+        draw.text((cx, avatar_cy), host.name[0], fill="white", font=font_initial, anchor="mm")
 
-    # Host name
-    font_name = find_font(22)
+    # ── Draw host name (below avatar, no overlap) ──
     name_color = "white" if active else (200, 200, 200, 200)
+    # anchor "mt" = middle-top, so name_y is the top of the text
     draw.text(
-        (pad + w // 2, pad + 115),
+        (cx, name_y),
         host.name,
         fill=name_color,
         font=font_name,
-        anchor="mm",
+        anchor="mt",
     )
 
-    # Sound wave bars for active card
+    # ── Sound wave bars (active only, inside card, below name) ──
     if active:
-        bar_w = 4
-        bar_gap = 3
-        num_bars = 7
+        bar_w = 5
+        bar_gap = 4
+        num_bars = 9
         total_bar_w = num_bars * bar_w + (num_bars - 1) * bar_gap
         bar_start_x = cx - total_bar_w // 2
-        bar_base_y = pad + h + 15 + 20
 
         for i in range(num_bars):
-            bar_h = 8 + int(12 * abs(math.sin(i * 0.8)))
+            bar_h = 8 + int(16 * abs(math.sin(i * 0.8)))
             bx = bar_start_x + i * (bar_w + bar_gap)
             draw.rounded_rectangle(
-                [(bx, bar_base_y - bar_h), (bx + bar_w, bar_base_y)],
+                [(bx, wave_base_y - bar_h), (bx + bar_w, wave_base_y)],
                 radius=2,
                 fill=host.color_rgb + (200,),
             )
@@ -991,7 +1021,7 @@ def build_ffmpeg_command(
     safe_title = dt_escape(title)
     filters.append(
         f"[bg]drawtext=text='{safe_title}'"
-        f":fontsize=32:fontcolor=white"
+        f":fontsize=50:fontcolor=white"
         f":x=(w-text_w)/2:y=20"
         f"{fontfile_opt}"
         f":shadowcolor=black:shadowx=2:shadowy=2"
@@ -1008,8 +1038,8 @@ def build_ffmpeg_command(
         next_label = f"sec{i}"
         filters.append(
             f"[{current_label}]drawtext=text='{safe_sec}'"
-            f":fontsize=24:fontcolor=#00CCFF"
-            f":x=(w-text_w)/2:y=65"
+            f":fontsize=40:fontcolor=#00CCFF"
+            f":x=(w-text_w)/2:y=90"
             f"{fontfile_opt}"
             f":shadowcolor=black:shadowx=1:shadowy=1"
             f":enable='between(t\\,{s:.3f}\\,{e:.3f})'"
