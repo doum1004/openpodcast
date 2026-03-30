@@ -770,7 +770,7 @@ def generate_ass_subtitles(
 ):
     """
     Generate ASS subtitle file.
-    Subtitle text only — no speaker name displayed.
+    When overlapping, subtitles stack vertically (bottom-up) instead of left/right.
     """
 
     font_name = Path(font_path).stem if os.path.exists(font_path) else "Arial"
@@ -836,9 +836,20 @@ def generate_ass_subtitles(
 
     white = rgb_to_ass_color(255, 255, 255)
 
-    solo_text_v = 80
-    overlap_text_v = 80
-    stack_text_margins = [80, 160, 240, 320]
+    # ── Vertical margins for stacking ──
+    # Solo subtitle: normal bottom position
+    solo_margin_v = 60
+
+    # Overlap: two speakers stacked vertically (bottom-up)
+    # Position 0 = lower (closer to bottom), Position 1 = upper (higher up)
+    # Each subtitle block is roughly 80-100px tall (font 34 + line spacing for up to 3 lines)
+    # We space them apart enough so they never overlap
+    overlap_line_height = 110  # approximate height of one subtitle block (34px font * ~3 lines)
+    overlap_base_margin = 50  # bottom-most subtitle margin from bottom edge
+
+    # For 3+ speakers stacked
+    stack_line_height = 90  # slightly smaller font, so smaller block
+    stack_base_margin = 40
 
     header = f"""[Script Info]
 Title: Podcast Video Subtitles
@@ -850,13 +861,13 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Solo,{font_name},42,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,3,2,2,100,100,{solo_text_v},1
-Style: OverlapL,{font_name},34,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,1,100,{VIDEO_WIDTH // 2 + 20},{overlap_text_v},1
-Style: OverlapR,{font_name},34,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,3,{VIDEO_WIDTH // 2 + 20},100,{overlap_text_v},1
-Style: Stack0,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[0]},1
-Style: Stack1,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[1]},1
-Style: Stack2,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[2]},1
-Style: Stack3,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_text_margins[3]},1
+Style: Solo,{font_name},42,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,3,2,2,100,100,{solo_margin_v},1
+Style: Overlap0,{font_name},36,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{overlap_base_margin},1
+Style: Overlap1,{font_name},36,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{overlap_base_margin + overlap_line_height},1
+Style: Stack0,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_base_margin},1
+Style: Stack1,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_base_margin + stack_line_height},1
+Style: Stack2,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_base_margin + stack_line_height * 2},1
+Style: Stack3,{font_name},30,{white},&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,4,2,1,2,100,100,{stack_base_margin + stack_line_height * 3},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -872,8 +883,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         host_info = hosts.get(evt.speaker)
         if host_info:
             ass_color = rgb_to_ass_color(*host_info.color_rgb)
+            speaker_name = host_info.name
         else:
             ass_color = white
+            speaker_name = evt.name
 
         # Clean stage directions
         cleaned_text = clean_display_text(evt.text)
@@ -881,9 +894,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not cleaned_text.strip():
             continue
 
-        # Format with line breaks and max line cap
         if seg.total_concurrent == 1:
-            # Solo: 3 lines, ~30 chars each
+            # Solo: centered at bottom, normal position
             display_text = format_subtitle_text(cleaned_text)
             display_text = escape_ass_text(display_text)
 
@@ -893,18 +905,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
         elif seg.total_concurrent == 2:
-            # Overlap: 3 lines, ~20 chars each (narrower)
+            # Two speakers overlapping: stack vertically, both centered
+            # position_index 0 = bottom, position_index 1 = top
             display_text = format_subtitle_text(cleaned_text)
             display_text = escape_ass_text(display_text)
 
-            style = "OverlapL" if seg.position_index == 0 else "OverlapR"
+            style = f"Overlap{seg.position_index}"
             dialogue_lines.append(
                 f"Dialogue: 0,{start},{end},{style},,0,0,0,,"
                 f"{{\\c{ass_color}}}{display_text}"
             )
 
         else:
-            # Stacked: 2 lines, ~25 chars each
+            # 3+ speakers: stacked vertically with smaller font
             display_text = format_subtitle_text(cleaned_text)
             display_text = escape_ass_text(display_text)
 
