@@ -532,7 +532,7 @@ class OpenpodcastTTS:
                 DUCK_FADE_MS = 800         # fade duration into ducked level
                 MUSIC_FADEOUT_MS = 2000    # fade-out duration after ID:1 ends
 
-                # --- Find ID:1 and ID:2 positions from timeline ---
+                # --- Find ID:1 duration from timeline ---
                 id1_duration_ms = 0
                 for entry in timeline or []:
                     if entry.get("id") == 1:
@@ -544,33 +544,16 @@ class OpenpodcastTTS:
                 lead_in_silence = AudioSegment.silent(duration=music_lead_in_ms)
                 mixed = lead_in_silence + mixed
 
-                # Update all timeline offsets in output report
-                for d_record in self.output_report.get("dialogues_timeline", []):
-                    if d_record.get("audio_start_ms") is not None:
-                        d_record["audio_start_ms"] += music_lead_in_ms
-                        d_record["audio_end_ms"] += music_lead_in_ms
-
-                for sec_record in self.output_report.get("sections_timeline", []):
-                    if sec_record.get("audio_start_ms") is not None:
-                        sec_record["audio_start_ms"] += music_lead_in_ms
-                        sec_record["audio_end_ms"] += music_lead_in_ms
-                    for script in sec_record.get("scripts", []):
-                        if script.get("audio_start_ms") is not None:
-                            script["audio_start_ms"] += music_lead_in_ms
-                            script["audio_end_ms"] += music_lead_in_ms
-
-                for entry in self.output_report.get("audio_timeline", []):
-                    if entry.get("start_ms") is not None:
-                        entry["start_ms"] += music_lead_in_ms
-                        entry["end_ms"] += music_lead_in_ms
+                # ----------------------------------------------------------
+                # Update ALL timeline offsets across every report structure
+                # ----------------------------------------------------------
+                self._shift_all_timeline_offsets(music_lead_in_ms)
 
                 # --- Build the intro music track with volume automation ---
-                # Total music length: solo + ID:1 speech + fade-out
                 total_intro_music_ms = MUSIC_SOLO_MS + id1_duration_ms + MUSIC_FADEOUT_MS
 
                 # Trim or loop the raw music to fit
                 if len(intro_music_raw) < total_intro_music_ms:
-                    # Loop if too short
                     loops_needed = (total_intro_music_ms // len(intro_music_raw)) + 1
                     intro_music_raw = intro_music_raw * loops_needed
                 intro_music_full = intro_music_raw[:total_intro_music_ms]
@@ -582,9 +565,7 @@ class OpenpodcastTTS:
                 duck_section_ms = id1_duration_ms
                 part_ducked_raw = intro_music_full[MUSIC_SOLO_MS:MUSIC_SOLO_MS + duck_section_ms]
                 if len(part_ducked_raw) > 0:
-                    # Apply duck: fade down at start, stay ducked
                     part_ducked = part_ducked_raw + DUCK_DB
-                    # Smooth transition: crossfade from full to ducked
                     if len(part_ducked) > DUCK_FADE_MS:
                         fade_in_portion = part_ducked_raw[:DUCK_FADE_MS].fade(
                             from_gain=0, to_gain=DUCK_DB, start=0, duration=DUCK_FADE_MS
@@ -638,11 +619,10 @@ class OpenpodcastTTS:
             if self.outro_music_path and self.outro_music_path.exists():
                 outro_music_raw = AudioSegment.from_file(str(self.outro_music_path))
 
-                OUTRO_GAP_MS = 0         # silence after last dialogue
-                OUTRO_FADE_IN_MS = 2000    # fade-in duration (quiet → full)
-                OUTRO_FADE_OUT_MS = 3000   # fade-out duration at the end
+                OUTRO_GAP_MS = 0
+                OUTRO_FADE_IN_MS = 2000
+                OUTRO_FADE_OUT_MS = 3000
 
-                # Apply fade-in at start and fade-out at end
                 outro_music = outro_music_raw
                 if len(outro_music) > OUTRO_FADE_IN_MS:
                     outro_music = outro_music.fade_in(OUTRO_FADE_IN_MS)
@@ -702,6 +682,53 @@ class OpenpodcastTTS:
         }
         return result
 
+    def _shift_all_timeline_offsets(self, shift_ms: int):
+        """Shift every audio_start_ms / audio_end_ms / start_ms / end_ms
+        across all output_report structures by shift_ms.
+
+        This is called when intro music prepends silence, pushing all
+        dialogue audio forward in time.
+        """
+        if shift_ms <= 0:
+            return
+
+        # 2) sections_timeline — top-level section boundaries
+        for sec_record in self.output_report.get("sections_timeline", []):
+            if sec_record.get("audio_start_ms") is not None:
+                sec_record["audio_start_ms"] += shift_ms
+            if sec_record.get("audio_end_ms") is not None:
+                sec_record["audio_end_ms"] += shift_ms
+
+            # 3) sections_timeline[].scripts[] — nested per-dialogue records
+            #    These MAY be the same dicts as dialogues_timeline (shared refs)
+            #    or they may be copies. We track what we've already shifted
+            #    by checking a sentinel to avoid double-shifting.
+            for script in sec_record.get("scripts", []):
+                if script.get("_intro_shifted"):
+                    continue  # already shifted via dialogues_timeline reference
+                if script.get("audio_start_ms") is not None:
+                    script["audio_start_ms"] += shift_ms
+                if script.get("audio_end_ms") is not None:
+                    script["audio_end_ms"] += shift_ms
+                script["_intro_shifted"] = True
+
+        # Mark dialogues_timeline entries too (in case scripts were same refs)
+        for d_record in self.output_report.get("dialogues_timeline", []):
+            d_record["_intro_shifted"] = True
+
+        # 4) audio_timeline (raw timeline lookup)
+        for entry in self.output_report.get("audio_timeline", []):
+            if entry.get("start_ms") is not None:
+                entry["start_ms"] += shift_ms
+            if entry.get("end_ms") is not None:
+                entry["end_ms"] += shift_ms
+
+        # 5) Clean up sentinel flags — remove _intro_shifted from all records
+        for d_record in self.output_report.get("dialogues_timeline", []):
+            d_record.pop("_intro_shifted", None)
+        for sec_record in self.output_report.get("sections_timeline", []):
+            for script in sec_record.get("scripts", []):
+                script.pop("_intro_shifted", None)
 
     def print_analysis(self):
         meta = self.podcast["metadata"]
