@@ -23,9 +23,9 @@ ENGINE_LABELS = {
 }
 
 
-def create_tts_client(hosts, api_key=None, quality="standard", cache_dir="./tts_cache"):
-    """Create the appropriate TTS client based on quality/engine setting"""
-    if quality == "hd":
+def create_tts_client(hosts, api_key=None, tts="hd", cache_dir="./tts_cache"):
+    """Create the appropriate TTS client based on engine setting"""
+    if tts == "hd":
         from .chirp3_tts import Chirp3HDClient
         return Chirp3HDClient(
             hosts=hosts,
@@ -83,7 +83,7 @@ class OpenpodcastTTS:
         json_path: str,
         output_dir: str = "./output",
         api_key: str | None = None,
-        quality: str = "standard",
+        tts: str = "hd",
     ):
         json_path_base_name = Path(json_path).stem
         self.json_dir = Path(json_path).parent
@@ -103,7 +103,7 @@ class OpenpodcastTTS:
             for d in section["dialogues"]:
                 self.all_dialogues.append(d)
 
-        self.quality = quality
+        self.tts = tts
 
         # Resolve intro/outro music paths relative to JSON file location
         self.intro_music_path = self._resolve_music_path(
@@ -113,11 +113,11 @@ class OpenpodcastTTS:
             self.podcast.get("outro_music")
         )
 
-        # Use different client based on quality/engine
+        # Use different client based on tts engine
         self.tts = create_tts_client(
             hosts=self.hosts,
             api_key=api_key,
-            quality=quality,
+            tts=tts,
             cache_dir=os.path.join(self.output_dir, "tts_cache")
         )
         self.mixer = AudioMixer(output_dir=self.output_dir)
@@ -130,8 +130,6 @@ class OpenpodcastTTS:
                 "title": self.podcast.get("title", ""),
                 "heat_level": self.podcast.get("heat_level", ""),
                 "background_image": self.podcast.get("background_image", ""),
-                "engine": ENGINE_LABELS.get(quality, quality),
-                "quality": quality,
                 "total_dialogues": len(self.all_dialogues),
                 "intro_music": str(self.intro_music_path) if self.intro_music_path else None,
                 "outro_music": str(self.outro_music_path) if self.outro_music_path else None,
@@ -194,7 +192,7 @@ class OpenpodcastTTS:
         return None
 
     def generate_individual_audio(self) -> dict[int, str]:
-        engine_label = ENGINE_LABELS.get(self.quality, self.quality)
+        engine_label = ENGINE_LABELS.get(self.tts, self.tts)
         self._log(f"\n🎙️  {self.podcast['show_name']} - {self.podcast['title']}")
         self._log(f"🔥 Heat Level: {self.podcast['heat_level']}")
         self._log(f"🎚️  Engine: {engine_label}")
@@ -896,7 +894,7 @@ def main():
     parser.add_argument("-k", "--api-key", default=None,
                         help="API key (Google for standard/hd)")
     parser.add_argument(
-        "-q", "--quality",
+        "-e", "--engine",
         choices=["standard", "hd"],
         default=None,
         help=(
@@ -908,13 +906,13 @@ def main():
     parser.add_argument("--retry-failed", action="store_true")
 
     args = parser.parse_args()
-    quality = args.quality or os.getenv("TTS_QUALITY", "standard")
-
+    tts = args.engine or os.getenv("TTS_ENGINE", "standard")
+    
     pipeline = OpenpodcastTTS(
         json_path=args.json_path,
         output_dir=args.output_dir,
         api_key=args.api_key,
-        quality=quality,
+        tts=tts,
     )
 
     if args.dry_run:
