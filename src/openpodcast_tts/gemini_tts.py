@@ -27,13 +27,13 @@ class GeminiVoiceConfig:
 
 AVAILABLE_VOICES = {
     "male": [
-        GeminiVoiceConfig("Kore",    "ko-KR", "Calm and low male voice"),
+        GeminiVoiceConfig("Achird",  "ko-KR", "Calm and low male voice"),
         GeminiVoiceConfig("Charon",  "ko-KR", "Energetic male voice"),
         GeminiVoiceConfig("Fenrir",  "ko-KR", "Deep and weighty male voice"),
         GeminiVoiceConfig("Orus",    "ko-KR", "Bright and friendly male voice"),
     ],
     "female": [
-        GeminiVoiceConfig("Puck",    "ko-KR", "Bright and articulate female voice"),
+        GeminiVoiceConfig("Kore",    "ko-KR", "Bright and articulate female voice"),
         GeminiVoiceConfig("Aoede",   "ko-KR", "Soft and warm female voice"),
         GeminiVoiceConfig("Leda",    "ko-KR", "Calm and intellectual female voice"),
         GeminiVoiceConfig("Zephyr",  "ko-KR", "Cheerful and lively female voice"),
@@ -42,18 +42,18 @@ AVAILABLE_VOICES = {
 
 ROLE_VOICE_PREFERENCE = {
     "male": {
-        "host":     ["Kore", "Orus", "Charon", "Fenrir"],
-        "analyst":  ["Fenrir", "Kore", "Orus", "Charon"],
-        "debater":  ["Charon", "Fenrir", "Orus", "Kore"],
-        "mediator": ["Orus", "Kore", "Charon", "Fenrir"],
-        "default":  ["Kore", "Charon", "Fenrir", "Orus"],
+        "host":     ["Achird", "Orus", "Charon", "Fenrir"],
+        "analyst":  ["Fenrir", "Achird", "Orus", "Charon"],
+        "debater":  ["Charon", "Fenrir", "Orus", "Achird"],
+        "mediator": ["Orus", "Achird", "Charon", "Fenrir"],
+        "default":  ["Achird", "Charon", "Fenrir", "Orus"],
     },
     "female": {
-        "host":     ["Leda", "Aoede", "Puck", "Zephyr"],
-        "analyst":  ["Puck", "Leda", "Zephyr", "Aoede"],
-        "debater":  ["Zephyr", "Puck", "Leda", "Aoede"],
-        "mediator": ["Aoede", "Leda", "Puck", "Zephyr"],
-        "default":  ["Puck", "Aoede", "Leda", "Zephyr"],
+        "host":     ["Leda", "Aoede", "Kore", "Zephyr"],
+        "analyst":  ["Kore", "Leda", "Zephyr", "Aoede"],
+        "debater":  ["Zephyr", "Kore", "Leda", "Aoede"],
+        "mediator": ["Aoede", "Leda", "Kore", "Zephyr"],
+        "default":  ["Kore", "Aoede", "Leda", "Zephyr"],
     },
 }
 
