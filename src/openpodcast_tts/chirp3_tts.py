@@ -31,11 +31,12 @@ def prepare_text(text: str) -> tuple[str, bool]:
     """
     # 1. Remove parenthetical directives
     clean = clean_text_for_tts(text)
-    clean = re.sub(r'[,，]\s*', r'... ', clean)
-    # convert ' and " to .
-    clean = re.sub(r'[\'"“”]', r'...', clean)
-    clean = re.sub(r'\s+', ' ', clean).strip()
-    return clean, False
+    # # convert ,(space) to ... for better pacing; also handle Chinese comma
+    # clean = re.sub(r'[,，]\s+', r'... ', clean)
+    # # convert ' and " to .
+    # clean = re.sub(r'[\'"“”]', r'...', clean)
+    # clean = re.sub(r'\s+', ' ', clean).strip()
+    # return clean, False
 
     # 2. If no punctuation, return plain text as-is
     if not SSML_TRIGGERS.search(clean):
@@ -45,27 +46,27 @@ def prepare_text(text: str) -> tuple[str, bool]:
     ssml = clean
 
     # Ellipsis first (must precede period replacement)
-    ssml = re.sub(r'\.{2,}', r'<break time="60ms"/>', ssml)
-    ssml = re.sub(r'…', r'<break time="60ms"/>', ssml)
+    ssml = re.sub(r'\.{2,}', r'<break time="10ms"/>', ssml)
+    ssml = re.sub(r'…', r'<break time="10ms"/>', ssml)
 
     # Period
-    ssml = re.sub(r'\.(\s)', r'.<break time="40ms"/>\1', ssml)
-    ssml = re.sub(r'\.$', r'.<break time="40ms"/>', ssml)
+    ssml = re.sub(r'\.(\s)', r'.<break time="10ms"/>\1', ssml)
+    ssml = re.sub(r'\.$', r'.<break time="10ms"/>', ssml)
 
     # Comma
-    ssml = re.sub(r'[,，]\s*', r', <break time="25ms"/> ', ssml)
+    ssml = re.sub(r'[,，]\s*', r', <break time="10ms"/> ', ssml)
 
     # Question mark
-    ssml = re.sub(r'[?？]\s*', r'? <break time="35ms"/> ', ssml)
+    ssml = re.sub(r'[?？]\s*', r'? <break time="10ms"/> ', ssml)
 
     # Exclamation mark
-    ssml = re.sub(r'[!！]\s*', r'! <break time="30ms"/> ', ssml)
+    ssml = re.sub(r'[!！]\s*', r'! <break time="10ms"/> ', ssml)
 
     # Tilde
-    ssml = re.sub(r'~', r'<break time="20ms"/>', ssml)
+    ssml = re.sub(r'~', r'<break time="10ms"/>', ssml)
 
     # Dash
-    ssml = re.sub(r'\s*[—–\-]{1,2}\s*', r' <break time="30ms"/> ', ssml)
+    ssml = re.sub(r'\s*[—–\-]{1,2}\s*', r' <break time="10ms"/> ', ssml)
 
     # Clean up consecutive spaces
     ssml = re.sub(r'\s+', ' ', ssml).strip()
@@ -343,8 +344,8 @@ class Chirp3HDClient:
         if cached:
             if cached != output_path:
                 shutil.copy2(str(cached), str(output_path))
-            key_short = self.cache.make_key(text, voice_cfg.voice_name)[:8]
-            print(f"    ♻️  Cache hit: {key_short}...")
+            key = self.cache.make_key(text, voice_cfg.voice_name)
+            print(f"    ♻️  Cache hit: {key}")
             return output_path
 
         # Prepare text — use SSML only when needed

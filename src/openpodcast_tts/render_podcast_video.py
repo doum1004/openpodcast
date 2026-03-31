@@ -150,6 +150,58 @@ def find_font_path() -> str:
 
 
 # ══════════════════════════════════════════════════════════════
+#  AUDIO DURATION PROBE
+# ══════════════════════════════════════════════════════════════
+
+
+def probe_audio_duration_ms(audio_path: str) -> Optional[int]:
+    """
+    Use ffprobe to get the actual duration of the audio file in milliseconds.
+    Returns None if ffprobe fails or the file doesn't exist.
+    """
+    if not audio_path or not os.path.exists(audio_path):
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                "-show_streams",
+                audio_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode != 0:
+            return None
+
+        info = json.loads(result.stdout)
+
+        # Try format duration first (most reliable for total file length)
+        fmt_duration = info.get("format", {}).get("duration")
+        if fmt_duration:
+            return int(float(fmt_duration) * 1000)
+
+        # Fallback: first audio stream duration
+        for stream in info.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                dur = stream.get("duration")
+                if dur:
+                    return int(float(dur) * 1000)
+
+        return None
+
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, OSError) as e:
+        print(f"    ⚠️  ffprobe failed for {audio_path}: {e}")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════
 #  PARSING — use hosts array from JSON
 # ══════════════════════════════════════════════════════════════
 
@@ -960,6 +1012,7 @@ def build_ffmpeg_command(
     """
     Build FFmpeg command.
     Uses background image if provided, otherwise solid color.
+    Video duration matches the full audio duration (including outro music).
     """
 
     total_duration_sec = total_duration_ms / 1000.0
@@ -1013,6 +1066,7 @@ def build_ffmpeg_command(
     filters = []
 
     # Background — image or solid color
+    # Duration matches full audio so outro music is not cut off
     if bg_input_idx is not None:
         # Loop the image for the duration, scale to exact size
         filters.append(
@@ -1115,6 +1169,8 @@ def build_ffmpeg_command(
     filter_str = ";".join(filters)
 
     # ── Command as list ──
+    # NOTE: No -shortest flag — we want the video to match the full audio
+    # duration, including any outro music that plays after the last dialogue.
     cmd_list = ["ffmpeg", "-y"]
 
     for inp in inputs:
@@ -1130,7 +1186,6 @@ def build_ffmpeg_command(
         "-c:a", "aac",
         "-b:a", "192k",
         "-pix_fmt", "yuv420p",
-        "-shortest",
         "-movflags", "+faststart",
         output_path,
     ])
@@ -1237,7 +1292,7 @@ def render_podcast_video(json_path: str, output_video: str = ""):
         print(f"     {img_status} {host.name} [{key}]")
     print(f"  📝 Dialogues: {len(events)}")
     print(f"  📌 Sections: {len(sections)}")
-    print(f"  ⏱️  Duration: {total_duration_ms / 1000:.1f}s")
+    print(f"  ⏱️  Duration (from JSON): {total_duration_ms / 1000:.1f}s")
 
     # ── 2. Detect overlaps ──
     print("\n🔍 Detecting overlaps...")
@@ -1303,6 +1358,36 @@ def render_podcast_video(json_path: str, output_video: str = ""):
         if not audio_path or not os.path.exists(audio_path):
             print("  ❌ Cannot proceed without audio!")
             return None
+
+    # ── 7b. Probe actual audio duration ──
+    # The JSON total_duration_ms is based on dialogue events only.
+    # The actual audio file may be longer (e.g., outro music, fade-out).
+    # We must use the actual audio duration so nothing gets cut off.
+    print(f"\n🔍 Probing actual audio duration...")
+    actual_audio_ms = probe_audio_duration_ms(audio_path)
+
+    if actual_audio_ms is not None:
+        print(f"  📊 JSON duration:  {total_duration_ms / 1000:.1f}s")
+        print(f"  📊 Audio duration: {actual_audio_ms / 1000:.1f}s")
+
+        if actual_audio_ms > total_duration_ms:
+            diff_sec = (actual_audio_ms - total_duration_ms) / 1000.0
+            print(f"  🎵 Audio is {diff_sec:.1f}s longer than dialogue "
+                  f"(likely outro music / fade-out)")
+            print(f"  ✅ Using actual audio duration to avoid cutting off audio")
+            total_duration_ms = actual_audio_ms
+        elif actual_audio_ms < total_duration_ms:
+            diff_sec = (total_duration_ms - actual_audio_ms) / 1000.0
+            print(f"  ⚠️  Audio is {diff_sec:.1f}s shorter than JSON metadata")
+            print(f"  ✅ Using actual audio duration to match")
+            total_duration_ms = actual_audio_ms
+        else:
+            print(f"  ✅ Durations match")
+    else:
+        print(f"  ⚠️  Could not probe audio duration, using JSON value: "
+              f"{total_duration_ms / 1000:.1f}s")
+
+    print(f"  ⏱️  Final video duration: {total_duration_ms / 1000:.1f}s")
 
     # ── 8. Build FFmpeg command ──
     if not output_video:
