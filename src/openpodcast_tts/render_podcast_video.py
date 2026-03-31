@@ -12,6 +12,7 @@ Supports --highlights-only mode to render vertical (9:16) short-form highlight c
 Usage:
     python render_podcast_video.py output/jidaenanto_ep01/podcast_data.json
     python render_podcast_video.py output/jidaenanto_ep01/podcast_data.json --highlights-only
+    python render_podcast_video.py output/jidaenanto_ep01/podcast_data.json --speed 1.25
 
 Requirements:
     - Python 3.10+
@@ -46,6 +47,7 @@ def clean_display_text(text: str) -> str:
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
 FPS = 30
+SPEED = 1.0
 CARD_W = 320
 CARD_H = 280
 MARGIN = 80
@@ -181,6 +183,50 @@ def probe_audio_duration_ms(audio_path: str) -> Optional[int]:
     except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, OSError) as e:
         print(f"    ⚠️  ffprobe failed for {audio_path}: {e}")
         return None
+
+
+# ══════════════════════════════════════════════════════════════
+#  SPEED HELPERS
+# ══════════════════════════════════════════════════════════════
+
+def apply_speed_to_ms(ms: int, speed: float) -> int:
+    """Convert an original timestamp (ms) to its sped-up equivalent."""
+    if speed == 1.0:
+        return ms
+    return int(ms / speed)
+
+
+def scale_events_for_speed(events: list[DialogueEvent], speed: float) -> list[DialogueEvent]:
+    """Return a new list of events with timestamps scaled by speed."""
+    if speed == 1.0:
+        return events
+    scaled = []
+    for e in events:
+        scaled.append(DialogueEvent(
+            dialogue_id=e.dialogue_id, index=e.index, speaker=e.speaker,
+            name=e.name, text=e.text, emotion=e.emotion,
+            interrupt_type=e.interrupt_type,
+            start_ms=apply_speed_to_ms(e.start_ms, speed),
+            end_ms=apply_speed_to_ms(e.end_ms, speed),
+            duration_ms=apply_speed_to_ms(e.duration_ms, speed),
+            section_title=e.section_title,
+            markers=e.markers, overlap_ms=apply_speed_to_ms(e.overlap_ms, speed),
+        ))
+    return scaled
+
+
+def scale_sections_for_speed(sections: list[SectionInfo], speed: float) -> list[SectionInfo]:
+    """Return a new list of sections with timestamps scaled by speed."""
+    if speed == 1.0:
+        return sections
+    return [
+        SectionInfo(
+            title=s.title,
+            start_ms=apply_speed_to_ms(s.start_ms, speed),
+            end_ms=apply_speed_to_ms(s.end_ms, speed),
+        )
+        for s in sections
+    ]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -889,6 +935,7 @@ def build_ffmpeg_command(
     background_image: str = "",
     highlight_title: str = "",
     is_shorts: bool = False,
+    speed: float = 1.0,
 ):
     total_duration_sec = total_duration_ms / 1000.0
 
@@ -929,6 +976,26 @@ def build_ffmpeg_command(
         return text.replace("\\", "\\\\").replace("'", "\u2019").replace(":", "\\:").replace("%", "%%")
 
     filters = []
+
+    # ── Audio speed adjustment ──
+    # Build atempo chain (atempo only supports 0.5–100.0 per instance)
+    audio_filters = []
+    if speed != 1.0:
+        remaining = speed
+        while remaining > 100.0:
+            audio_filters.append("atempo=100.0")
+            remaining /= 100.0
+        while remaining < 0.5:
+            audio_filters.append("atempo=0.5")
+            remaining /= 0.5
+        audio_filters.append(f"atempo={remaining:.6f}")
+
+    if audio_filters:
+        atempo_chain = ",".join(audio_filters)
+        filters.append(f"[{audio_idx}:a]{atempo_chain}[aout]")
+        audio_out_label = "aout"
+    else:
+        audio_out_label = f"{audio_idx}:a"
 
     if bg_input_idx is not None:
         filters.append(
@@ -1058,7 +1125,7 @@ def build_ffmpeg_command(
     cmd_list.extend([
         "-filter_complex", filter_str,
         "-map", f"[{final_label}]",
-        "-map", f"{audio_idx}:a",
+        "-map", f"[{audio_out_label}]" if speed != 1.0 else f"{audio_idx}:a",
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "20",
@@ -1123,6 +1190,7 @@ def render_highlight_clip(
     title: str,
     background_image: str = "",
     padding_ms: int = 500,
+    speed: float = 1.0,
 ) -> Optional[str]:
     print(f"\n  {'─' * 50}")
     print(f"  🎬 Highlight {highlight_index + 1}: {highlight.title}")
@@ -1131,6 +1199,8 @@ def render_highlight_clip(
           f"({(highlight.end_ms - highlight.start_ms) / 1000:.1f}s)")
     print(f"     Tags: {', '.join(highlight.tags)}")
     print(f"     Format: 📱 Vertical {SHORTS_WIDTH}x{SHORTS_HEIGHT} (9:16 Shorts)")
+    if speed != 1.0:
+        print(f"     ⚡ Speed: {speed}x")
 
     # Extract audio
     clip_audio_path = os.path.join(temp_dir, f"highlight_{highlight_index:02d}_audio.wav")
@@ -1142,17 +1212,22 @@ def render_highlight_clip(
     clip_duration_ms = probe_audio_duration_ms(clip_audio_path)
     if clip_duration_ms is None:
         clip_duration_ms = (highlight.end_ms - highlight.start_ms) + padding_ms * 2
-    print(f"     ⏱️  Clip duration: {clip_duration_ms / 1000:.1f}s")
 
-    # Shift events
+    # Apply speed to duration
+    sped_clip_duration_ms = apply_speed_to_ms(clip_duration_ms, speed)
+    print(f"     ⏱️  Clip duration: {clip_duration_ms / 1000:.1f}s"
+          f"{f' → {sped_clip_duration_ms / 1000:.1f}s @ {speed}x' if speed != 1.0 else ''}")
+
+    # Shift events then scale for speed
     shifted_events = shift_events_for_highlight(highlight.events, highlight.start_ms, padding_ms)
+    scaled_events = scale_events_for_speed(shifted_events, speed)
 
-    # Generate ASS subtitles (shorts mode)
+    # Generate ASS subtitles (shorts mode) with speed-adjusted timestamps
     clip_ass_path = os.path.join(temp_dir, f"highlight_{highlight_index:02d}.ass")
     generate_ass_subtitles(
-        shifted_events, hosts, clip_ass_path, font_path,
+        scaled_events, hosts, clip_ass_path, font_path,
         highlight_title=highlight.title,
-        highlight_title_duration_ms=min(3000, clip_duration_ms // 3),
+        highlight_title_duration_ms=apply_speed_to_ms(min(3000, clip_duration_ms // 3), speed),
         is_shorts=True,
     )
 
@@ -1170,22 +1245,24 @@ def render_highlight_clip(
     # Output path
     safe_title = re.sub(r'[^\w가-힣\s-]', '', highlight.title).strip()
     safe_title = re.sub(r'\s+', '_', safe_title)[:40]
-    output_path = os.path.join(base_dir, f"highlight_{highlight_index + 1:02d}_{safe_title}.mp4")
+    speed_suffix = f"_{speed}x" if speed != 1.0 else ""
+    output_path = os.path.join(base_dir, f"highlight_{highlight_index + 1:02d}_{safe_title}{speed_suffix}.mp4")
 
-    # Build FFmpeg command (shorts mode)
+    # Build FFmpeg command (shorts mode) with speed-scaled events/duration
     cmd_list = build_ffmpeg_command(
         hosts=hosts,
-        events=shifted_events,
+        events=scaled_events,
         sections=[],
         audio_path=clip_audio_path,
         ass_path=clip_ass_path,
-        total_duration_ms=clip_duration_ms,
+        total_duration_ms=sped_clip_duration_ms,
         output_path=output_path,
         font_path=font_path,
         title=title,
         highlight_title=highlight.title,
         background_image=shorts_bg,
         is_shorts=True,
+        speed=speed,
     )
 
     cmd_debug_path = os.path.join(temp_dir, f"highlight_{highlight_index:02d}_cmd.txt")
@@ -1210,7 +1287,7 @@ def render_highlight_clip(
 #  MAIN PIPELINE — HIGHLIGHTS ONLY (SHORTS)
 # ══════════════════════════════════════════════════════════════
 
-def render_highlights_only(json_path: str, output_dir: str = ""):
+def render_highlights_only(json_path: str, output_dir: str = "", speed: float = 1.0):
     print("=" * 60)
     print("📱 Podcast Highlight Renderer (Vertical Shorts 9:16)")
     print("=" * 60)
@@ -1228,6 +1305,8 @@ def render_highlights_only(json_path: str, output_dir: str = ""):
     print(f"  📝 Dialogues: {len(events)}")
     print(f"  🌟 Highlights: {len(highlights)}")
     print(f"  📱 Output format: {SHORTS_WIDTH}x{SHORTS_HEIGHT} (9:16 vertical)")
+    if speed != 1.0:
+        print(f"  ⚡ Speed: {speed}x")
 
     if not highlights:
         print("\n❌ No highlights found in JSON!")
@@ -1240,7 +1319,10 @@ def render_highlights_only(json_path: str, output_dir: str = ""):
     print(f"  ✅ {len(resolved)} highlights resolved")
     for i, hl in enumerate(resolved):
         dur = (hl.end_ms - hl.start_ms) / 1000.0
-        print(f"     [{i + 1}] {hl.title} ({dur:.1f}s, {len(hl.events)} events)")
+        sped_dur = dur / speed
+        print(f"     [{i + 1}] {hl.title} ({dur:.1f}s"
+              f"{f' → {sped_dur:.1f}s @ {speed}x' if speed != 1.0 else ''}"
+              f", {len(hl.events)} events)")
 
     # Calculate positions (shorts layout)
     print("\n📐 Calculating host positions (vertical layout)...")
@@ -1294,6 +1376,7 @@ def render_highlights_only(json_path: str, output_dir: str = ""):
             font_path=font_path,
             title=title,
             background_image=bg_source_path,
+            speed=speed,
         )
         if result:
             output_paths.append(result)
@@ -1302,6 +1385,8 @@ def render_highlights_only(json_path: str, output_dir: str = ""):
     print(f"\n{'=' * 60}")
     print(f"✅ Highlight rendering complete!")
     print(f"   📱 Format: {SHORTS_WIDTH}x{SHORTS_HEIGHT} (9:16 vertical shorts)")
+    if speed != 1.0:
+        print(f"   ⚡ Speed: {speed}x")
     print(f"   📊 {len(output_paths)}/{len(resolved)} clips rendered successfully")
     for p in output_paths:
         size_mb = os.path.getsize(p) / (1024 * 1024)
@@ -1315,7 +1400,7 @@ def render_highlights_only(json_path: str, output_dir: str = ""):
 #  MAIN PIPELINE — FULL VIDEO (LANDSCAPE)
 # ══════════════════════════════════════════════════════════════
 
-def render_podcast_video(json_path: str, output_video: str = ""):
+def render_podcast_video(json_path: str, output_video: str = "", speed: float = 1.0):
     print("=" * 60)
     print("🎬 Podcast Video Renderer (FFmpeg)")
     print("=" * 60)
@@ -1338,6 +1423,8 @@ def render_podcast_video(json_path: str, output_video: str = ""):
     print(f"  📌 Sections: {len(sections)}")
     print(f"  🌟 Highlights: {len(highlights)}")
     print(f"  ⏱️  Duration (from JSON): {total_duration_ms / 1000:.1f}s")
+    if speed != 1.0:
+        print(f"  ⚡ Speed: {speed}x → ~{total_duration_ms / speed / 1000:.1f}s")
 
     print("\n🔍 Detecting overlaps...")
     overlaps = detect_overlaps(events)
@@ -1374,10 +1461,14 @@ def render_podcast_video(json_path: str, output_video: str = ""):
         else:
             print(f"  ⚠️  Not found, using solid color fallback")
 
+    # Scale events and sections for speed
+    scaled_events = scale_events_for_speed(events, speed)
+    scaled_sections = scale_sections_for_speed(sections, speed)
+
     font_path = find_font_path()
     ass_path = os.path.join(temp_dir, "subtitles.ass")
     print(f"\n📝 Generating ASS subtitles...")
-    generate_ass_subtitles(events, hosts, ass_path, font_path, is_shorts=False)
+    generate_ass_subtitles(scaled_events, hosts, ass_path, font_path, is_shorts=False)
 
     print(f"\n🎧 Audio: {audio_path}")
     if not audio_path or not os.path.exists(audio_path):
@@ -1406,19 +1497,24 @@ def render_podcast_video(json_path: str, output_video: str = ""):
     else:
         print(f"  ⚠️  Could not probe audio duration, using JSON value")
 
-    print(f"  ⏱️  Final video duration: {total_duration_ms / 1000:.1f}s")
+    # Apply speed to total duration
+    sped_total_duration_ms = apply_speed_to_ms(total_duration_ms, speed)
+    print(f"  ⏱️  Final video duration: {sped_total_duration_ms / 1000:.1f}s"
+          f"{f' (original {total_duration_ms / 1000:.1f}s @ {speed}x)' if speed != 1.0 else ''}")
 
     if not output_video:
-        output_video = os.path.join(base_dir, "podcast_video.mp4")
+        speed_suffix = f"_{speed}x" if speed != 1.0 else ""
+        output_video = os.path.join(base_dir, f"podcast_video{speed_suffix}.mp4")
 
     print(f"\n🔧 Building FFmpeg command...")
     cmd_list = build_ffmpeg_command(
-        hosts=hosts, events=events, sections=sections,
+        hosts=hosts, events=scaled_events, sections=scaled_sections,
         audio_path=audio_path, ass_path=ass_path,
-        total_duration_ms=total_duration_ms,
+        total_duration_ms=sped_total_duration_ms,
         output_path=output_video, font_path=font_path,
         title=title, heat_level=heat_level,
         background_image=bg_prepared_path, is_shorts=False,
+        speed=speed,
     )
 
     cmd_path = os.path.join(temp_dir, "ffmpeg_command.txt")
@@ -1439,6 +1535,8 @@ def render_podcast_video(json_path: str, output_video: str = ""):
         print(f"✅ Video rendered successfully!")
         print(f"   📁 {output_video}")
         print(f"   📦 {size_mb:.1f} MB")
+        if speed != 1.0:
+            print(f"   ⚡ Speed: {speed}x")
         print(f"{'=' * 60}")
     else:
         print(f"\n❌ FFmpeg failed (exit code {result.returncode})")
@@ -1464,6 +1562,12 @@ def main():
     parser.add_argument("--height", type=int, default=1080, help="Video height (default: 1080, ignored for highlights)")
     parser.add_argument("--fps", type=int, default=30, help="Frames per second (default: 30)")
     parser.add_argument(
+        "--speed", type=float, default=1.0,
+        help="Playback speed multiplier (default: 1.0). "
+             "Values > 1 speed up, < 1 slow down. "
+             "E.g., --speed 1.25 for 25%% faster playback.",
+    )
+    parser.add_argument(
         "--highlights-only",
         action="store_true", default=False,
         help="Render only highlight clips as vertical shorts (1080x1920, 9:16). "
@@ -1472,10 +1576,20 @@ def main():
 
     args = parser.parse_args()
 
-    global VIDEO_WIDTH, VIDEO_HEIGHT, FPS
+    global VIDEO_WIDTH, VIDEO_HEIGHT, FPS, SPEED
     VIDEO_WIDTH = args.width
     VIDEO_HEIGHT = args.height
     FPS = args.fps
+    SPEED = args.speed
+
+    # Validate speed
+    if args.speed <= 0:
+        print(f"❌ Speed must be positive, got: {args.speed}")
+        sys.exit(1)
+    if args.speed < 0.25:
+        print(f"⚠️  Very slow speed ({args.speed}x) may produce very long videos")
+    if args.speed > 4.0:
+        print(f"⚠️  Very fast speed ({args.speed}x) may make audio unintelligible")
 
     json_path = Path(args.json_path).resolve()
 
@@ -1490,9 +1604,9 @@ def main():
         output = str(Path(output).resolve())
 
     if args.highlights_only:
-        render_highlights_only(str(json_path), output)
+        render_highlights_only(str(json_path), output, speed=args.speed)
     else:
-        render_podcast_video(str(json_path), output)
+        render_podcast_video(str(json_path), output, speed=args.speed)
 
 
 if __name__ == "__main__":
