@@ -18,7 +18,7 @@ EMOJI = {"host_1": "🔵", "host_2": "🔴", "host_3": "🟢", "host_4": "🟡"}
 
 # Engine labels for display
 ENGINE_LABELS = {
-    "standard": "Gemini Flash TTS",
+    "gemini": "Gemini Flash TTS",
     "hd": "Chirp 3 HD",
 }
 
@@ -104,6 +104,7 @@ class OpenpodcastTTS:
                 self.all_dialogues.append(d)
 
         self.tts = tts
+        print(f"Initialized OpenpodcastTTS with engine: {ENGINE_LABELS.get(tts, tts)}")
 
         # Resolve intro/outro music paths relative to JSON file location
         self.intro_music_path = self._resolve_music_path(
@@ -136,7 +137,6 @@ class OpenpodcastTTS:
             },
             "hosts": self.podcast.get("hosts", ""),
             "sections_timeline": [],
-            "dialogues_timeline": [],
             "summary": {},
             "console_output": [],
         }
@@ -192,6 +192,9 @@ class OpenpodcastTTS:
         return None
 
     def generate_individual_audio(self) -> dict[int, str]:
+        script_lines = []
+        script_lines.append(f"{self.podcast['show_name']} - {self.podcast['title']}")
+        
         engine_label = ENGINE_LABELS.get(self.tts, self.tts)
         self._log(f"\n🎙️  {self.podcast['show_name']} - {self.podcast['title']}")
         self._log(f"🔥 Heat Level: {self.podcast['heat_level']}")
@@ -246,6 +249,8 @@ class OpenpodcastTTS:
                     self._log(f"📌 {corner} {current_section}")
                     self._log(f"   Mood: {section['section_mood']} | Formation: {section['debate_formation']}")
                     self._log(f"{'─' * 60}")
+
+                    script_lines.append(f"section: {current_section} (Mood: {section['section_mood']}")
 
                     section_start_time = time.time()
                     section_record = {
@@ -308,9 +313,11 @@ class OpenpodcastTTS:
             log_line = (
                 f"  {status} {progress} {EMOJI.get(speaker, '⚪')} "
                 f"{d['name']}({voice_name}){tag} "
-                f"[{emotion}]: {text[:55]}{'...' if len(text) > 55 else ''} {marker_str}"
+                f"[{emotion}]: {text} {marker_str}"
             )
             self._log(log_line)
+
+            script_lines.append(f"[{i+1}] {d['name']}: {emotion}: {text} ({marker_str})")
 
             # Build per-script record (audio positions filled later in build_timeline)
             script_record = {
@@ -340,7 +347,6 @@ class OpenpodcastTTS:
                 "audio_duration_ms": None,
                 "audio_overlap_ms": None,
             }
-            self.output_report["dialogues_timeline"].append(script_record)
             section_dialogues_records.append(script_record)
 
         # Close the last section record
@@ -370,6 +376,8 @@ class OpenpodcastTTS:
         self.output_report["summary"]["pipeline_start_time"] = pipeline_start
         self.output_report["summary"]["pipeline_end_time"] = pipeline_end
         self.output_report["summary"]["pipeline_duration_sec"] = round(pipeline_end - pipeline_start, 3)
+
+        self.output_report["script_lines"] = script_lines
 
         return audio_files
 
@@ -442,24 +450,6 @@ class OpenpodcastTTS:
                 "file": entry.get("file", ""),
                 "overlap_ms": overlap_ms,
             }
-
-        # Store the corrected audio_timeline
-        self.output_report["audio_timeline"] = list(audio_lookup.values())
-
-        # Enrich dialogues_timeline with audio positions
-        for d_record in self.output_report["dialogues_timeline"]:
-            d_id = d_record["dialogue_id"]
-            if d_id in audio_lookup:
-                info = audio_lookup[d_id]
-                d_record["audio_start_ms"] = info["start_ms"]
-                d_record["audio_end_ms"] = info["end_ms"]
-                d_record["audio_duration_ms"] = info["duration_ms"]
-                d_record["audio_overlap_ms"] = info["overlap_ms"]
-            else:
-                d_record["audio_start_ms"] = 0
-                d_record["audio_end_ms"] = 0
-                d_record["audio_duration_ms"] = 0
-                d_record["audio_overlap_ms"] = 0
 
         # Compute per-section audio timeline
         for sec_record in self.output_report["sections_timeline"]:
@@ -710,20 +700,6 @@ class OpenpodcastTTS:
                     script["audio_end_ms"] += shift_ms
                 script["_intro_shifted"] = True
 
-        # Mark dialogues_timeline entries too (in case scripts were same refs)
-        for d_record in self.output_report.get("dialogues_timeline", []):
-            d_record["_intro_shifted"] = True
-
-        # 4) audio_timeline (raw timeline lookup)
-        for entry in self.output_report.get("audio_timeline", []):
-            if entry.get("start_ms") is not None:
-                entry["start_ms"] += shift_ms
-            if entry.get("end_ms") is not None:
-                entry["end_ms"] += shift_ms
-
-        # 5) Clean up sentinel flags — remove _intro_shifted from all records
-        for d_record in self.output_report.get("dialogues_timeline", []):
-            d_record.pop("_intro_shifted", None)
         for sec_record in self.output_report.get("sections_timeline", []):
             for script in sec_record.get("scripts", []):
                 script.pop("_intro_shifted", None)
@@ -773,11 +749,7 @@ class OpenpodcastTTS:
             lines.append(f"{_fmt_ms_hms(start_ms)} {title}")
 
         txt_content = "\n".join(lines)
-
-        # Save to file
-        txt_path = self.output_dir / "sections_timeline.txt"
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(txt_content + "\n")
+        self.output_report["timeline_table"] = txt_content
 
         # Also print to console
         self._log(f"\n{'─' * 60}")
@@ -785,7 +757,6 @@ class OpenpodcastTTS:
         self._log(f"{'─' * 60}")
         for line in lines:
             self._log(f"  {line}")
-        self._log(f"\n💾 Sections timeline saved: {txt_path}")
 
     def _save_output_json(self):
         """Persist the full output report to output.json."""
@@ -892,21 +863,21 @@ def main():
     parser.add_argument("-o", "--output", default="openpodcast_episode.mp3")
     parser.add_argument("-d", "--output-dir", default="./output")
     parser.add_argument("-k", "--api-key", default=None,
-                        help="API key (Google for standard/hd)")
+                        help="API key (Google for hd/gemini)")
     parser.add_argument(
         "-e", "--engine",
-        choices=["standard", "hd"],
+        choices=["hd", "gemini"],
         default=None,
         help=(
-            "standard: Gemini Flash TTS | "
             "hd: Chirp 3 HD (Google Cloud)"
+            "gemini: Gemini Flash TTS | "
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--retry-failed", action="store_true")
 
     args = parser.parse_args()
-    tts = args.engine or os.getenv("TTS_ENGINE", "standard")
+    tts = args.engine or os.getenv("TTS_ENGINE", "hd")
     
     pipeline = OpenpodcastTTS(
         json_path=args.json_path,

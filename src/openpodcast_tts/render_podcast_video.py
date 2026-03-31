@@ -273,30 +273,25 @@ def parse_podcast_json(json_path: str):
             hosts[key] = HostInfo(key=key, name=info["name"], color_hex=c["hex"], color_rgb=c["rgb"])
 
     if not hosts:
-        for d in data.get("dialogues_timeline", []):
-            key = d["speaker"]
-            if key not in hosts:
-                c = HOST_COLORS.get(key, HOST_COLORS["host_1"])
-                hosts[key] = HostInfo(key=key, name=d["name"], color_hex=c["hex"], color_rgb=c["rgb"])
+        raise ValueError("No hosts found in JSON data. Cannot render video without host information.")
 
     sections: list[SectionInfo] = []
     section_map: dict[int, str] = {}
+    events: list[DialogueEvent] = []
     for sec in data.get("sections_timeline", []):
         sections.append(SectionInfo(title=sec["section_title"], start_ms=sec["audio_start_ms"], end_ms=sec["audio_end_ms"]))
         for script in sec.get("scripts", []):
             section_map[script["dialogue_id"]] = sec["section_title"]
+            events.append(DialogueEvent(
+                dialogue_id=script["dialogue_id"], index=script.get("index", 0),
+                speaker=script["speaker"], name=script["name"], text=script["text"],
+                emotion=script.get("emotion", ""), interrupt_type=script.get("interrupt_type", "none"),
+                start_ms=script["audio_start_ms"], end_ms=script["audio_end_ms"],
+                duration_ms=script["audio_duration_ms"],
+                section_title=section_map.get(script["dialogue_id"], ""),
+                markers=script.get("markers", {}), overlap_ms=script.get("audio_overlap_ms", 0),
+            ))
 
-    events: list[DialogueEvent] = []
-    for d in data.get("dialogues_timeline", []):
-        events.append(DialogueEvent(
-            dialogue_id=d["dialogue_id"], index=d.get("index", 0),
-            speaker=d["speaker"], name=d["name"], text=d["text"],
-            emotion=d.get("emotion", ""), interrupt_type=d.get("interrupt_type", "none"),
-            start_ms=d["audio_start_ms"], end_ms=d["audio_end_ms"],
-            duration_ms=d["audio_duration_ms"],
-            section_title=section_map.get(d["dialogue_id"], ""),
-            markers=d.get("markers", {}), overlap_ms=d.get("audio_overlap_ms", 0),
-        ))
     events.sort(key=lambda e: (e.start_ms, e.dialogue_id))
 
     highlights: list[HighlightInfo] = []
