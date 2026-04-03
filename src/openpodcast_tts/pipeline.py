@@ -6,6 +6,7 @@ import os
 import time
 import sys
 import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -195,15 +196,16 @@ class OpenpodcastTTS:
                 return section
         return None
 
-    def generate_individual_audio(self) -> dict[int, str]:
+    def generate_individual_audio(self, max_workers: int = 4) -> dict[int, str]:
         script_lines = []
         script_lines.append(f"{self.podcast['show_name']} - {self.podcast['title']}")
-        
+
         engine_label = ENGINE_LABELS.get(self.tts, self.tts)
         self._log(f"\n🎙️  {self.podcast['show_name']} - {self.podcast['title']}")
         self._log(f"🔥 Heat Level: {self.podcast['heat_level']}")
         self._log(f"🎚️  Engine: {engine_label}")
         self._log(f"📝 Total dialogues: {len(self.all_dialogues)}")
+        self._log(f"🧵 Workers: {max_workers}")
 
         # Log music info
         if self.intro_music_path:
@@ -222,17 +224,59 @@ class OpenpodcastTTS:
 
         self._log("=" * 60)
 
+        pipeline_start = time.time()
+
+        # ── Phase 1: Parallel TTS synthesis ──────────────────────────
+        # Submit all synthesize() calls to a thread pool.
+        # Each TTS client is already thread-safe (locked cache, rate limiter, failed list).
+
+        synthesis_results: dict[int, Path | None] = {}
+        synthesis_times: dict[int, tuple[float, float]] = {}  # d_id -> (start, end)
+        completed_count = 0
+
+        def _synthesize_one(d: dict) -> tuple[int, Path | None]:
+            output_path = self.tts_dir / f"d_{d['id']:04d}.wav"
+            result = self.tts.synthesize(
+                text=d["text"],
+                speaker=d["speaker"],
+                emotion=d["emotion"],
+                output_path=output_path,
+            )
+            return d["id"], result
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for d in self.all_dialogues:
+                start_t = time.time()
+                future = executor.submit(_synthesize_one, d)
+                futures[future] = (d, start_t)
+
+            for future in as_completed(futures):
+                d, start_t = futures[future]
+                end_t = time.time()
+                d_id = d["id"]
+                try:
+                    _, result = future.result()
+                except Exception as e:
+                    self._log(f"    ❌ Thread error for d_{d_id:04d}: {e}")
+                    result = None
+                synthesis_results[d_id] = result
+                synthesis_times[d_id] = (start_t, end_t)
+                completed_count += 1
+                if completed_count % 10 == 0 or completed_count == len(self.all_dialogues):
+                    self._log(f"  🧵 Progress: {completed_count}/{len(self.all_dialogues)} synthesized")
+
+        synthesis_elapsed = round(time.time() - pipeline_start, 1)
+        self._log(f"  🧵 Synthesis completed in {synthesis_elapsed}s ({max_workers} workers)")
+
+        # ── Phase 2: Sequential logging & section tracking ───────────
         audio_files: dict[int, str] = {}
         current_section = ""
         success = 0
         failed = 0
 
-        # Track section-level timing
-        section_start_time = None
         section_record = None
         section_dialogues_records = []
-
-        pipeline_start = time.time()
 
         for i, d in enumerate(self.all_dialogues):
             # Detect section change
@@ -240,11 +284,11 @@ class OpenpodcastTTS:
                 if d in section["dialogues"] and section["section_title"] != current_section:
                     # Close previous section record
                     if section_record is not None:
-                        section_end = time.time()
-                        section_record["gen_end_time"] = section_end
-                        section_record["gen_duration_sec"] = round(section_end - section_record["_start"], 3)
+                        if section_record["gen_start_time"] and section_record["gen_end_time"]:
+                            section_record["gen_duration_sec"] = round(
+                                section_record["gen_end_time"] - section_record["gen_start_time"], 3
+                            )
                         section_record["scripts"] = section_dialogues_records
-                        del section_record["_start"]
                         self.output_report["sections_timeline"].append(section_record)
 
                     current_section = section["section_title"]
@@ -256,13 +300,11 @@ class OpenpodcastTTS:
 
                     script_lines.append(f"section: {current_section} (Mood: {section['section_mood']}")
 
-                    section_start_time = time.time()
                     section_record = {
                         "section_title": current_section,
                         "section_mood": section.get("section_mood", ""),
                         "debate_formation": section.get("debate_formation", ""),
-                        "gen_start_time": section_start_time,
-                        "_start": section_start_time,
+                        "gen_start_time": None,
                         "gen_end_time": None,
                         "gen_duration_sec": None,
                         "scripts": [],
@@ -275,20 +317,18 @@ class OpenpodcastTTS:
             text = d["text"]
             emotion = d["emotion"]
             interrupt = d["interrupt_type"]
-
             output_path = self.tts_dir / f"d_{d_id:04d}.wav"
 
-            script_start = time.time()
-
-            result = self.tts.synthesize(
-                text=text,
-                speaker=speaker,
-                emotion=emotion,
-                output_path=output_path,
-            )
-
-            script_end = time.time()
+            result = synthesis_results.get(d_id)
+            script_start, script_end = synthesis_times.get(d_id, (0, 0))
             script_duration = round(script_end - script_start, 3)
+
+            # Update section gen time bounds
+            if section_record is not None:
+                if section_record["gen_start_time"] is None or script_start < section_record["gen_start_time"]:
+                    section_record["gen_start_time"] = script_start
+                if section_record["gen_end_time"] is None or script_end > section_record["gen_end_time"]:
+                    section_record["gen_end_time"] = script_end
 
             if result:
                 audio_files[d_id] = str(output_path)
@@ -323,7 +363,6 @@ class OpenpodcastTTS:
 
             script_lines.append(f"[{i+1}] {d['name']}: {emotion}: {text} ({marker_str})")
 
-            # Build per-script record (audio positions filled later in build_timeline)
             script_record = {
                 "dialogue_id": d_id,
                 "index": i + 1,
@@ -345,7 +384,6 @@ class OpenpodcastTTS:
                     "triggers_conflict": d.get("triggers_conflict", False),
                     "is_hook": d.get("is_hook", False),
                 },
-                # Placeholders — populated by build_timeline
                 "audio_start_ms": None,
                 "audio_end_ms": None,
                 "audio_duration_ms": None,
@@ -355,11 +393,11 @@ class OpenpodcastTTS:
 
         # Close the last section record
         if section_record is not None:
-            section_end = time.time()
-            section_record["gen_end_time"] = section_end
-            section_record["gen_duration_sec"] = round(section_end - section_record["_start"], 3)
+            if section_record["gen_start_time"] and section_record["gen_end_time"]:
+                section_record["gen_duration_sec"] = round(
+                    section_record["gen_end_time"] - section_record["gen_start_time"], 3
+                )
             section_record["scripts"] = section_dialogues_records
-            del section_record["_start"]
             self.output_report["sections_timeline"].append(section_record)
 
         pipeline_end = time.time()
@@ -369,6 +407,7 @@ class OpenpodcastTTS:
 
         self._log(f"\n{'=' * 60}")
         self._log(f"✅ Success: {success} | ❌ Failed: {failed} | Total: {len(self.all_dialogues)}")
+        self._log(f"⏱️  Generation elapsed: {synthesis_elapsed}s (workers: {max_workers})")
 
         if failed > 0:
             self._log(f"💡 Retry failures: uv run openpodcast <json> --retry-failed")
@@ -377,6 +416,8 @@ class OpenpodcastTTS:
         self.output_report["summary"]["success"] = success
         self.output_report["summary"]["failed"] = failed
         self.output_report["summary"]["total"] = len(self.all_dialogues)
+        self.output_report["summary"]["synthesis_elapsed_sec"] = synthesis_elapsed
+        self.output_report["summary"]["synthesis_workers"] = max_workers
         self.output_report["summary"]["pipeline_start_time"] = pipeline_start
         self.output_report["summary"]["pipeline_end_time"] = pipeline_end
         self.output_report["summary"]["pipeline_duration_sec"] = round(pipeline_end - pipeline_start, 3)
@@ -385,7 +426,7 @@ class OpenpodcastTTS:
 
         return audio_files
 
-    def retry_failed(self) -> dict[int, str]:
+    def retry_failed(self, max_workers: int = 4) -> dict[int, str]:
         failed_path = self.output_dir / "tts_cache" / "failed.json"
         if not failed_path.exists():
             self._log("✅ No failure log found. All succeeded!")
@@ -394,30 +435,35 @@ class OpenpodcastTTS:
         with open(failed_path, "r", encoding="utf-8") as f:
             failed_items = json.load(f)
 
-        self._log(f"\n🔄 Retrying failures: {len(failed_items)} entries")
+        self._log(f"\n🔄 Retrying failures: {len(failed_items)} entries (workers: {max_workers})")
         self._log("=" * 60)
 
         audio_files: dict[int, str] = {}
         still_failed = []
 
-        for item in failed_items:
-            retry_start = time.time()
+        def _retry_one(item):
+            start = time.time()
             result = self.tts.synthesize(
                 text=item["text"],
                 speaker=item["speaker"],
                 emotion=item["emotion"],
                 output_path=item["output_path"],
             )
-            retry_end = time.time()
+            end = time.time()
+            return item, result, round(end - start, 3)
 
-            if result:
-                fname = Path(item["output_path"]).stem
-                d_id = int(fname.split("_")[1])
-                audio_files[d_id] = item["output_path"]
-                self._log(f"  ✅ Recovery succeeded: {fname} ({round(retry_end - retry_start, 3)}s)")
-            else:
-                still_failed.append(item)
-                self._log(f"  ❌ Still failing: {item['text'][:50]}... ({round(retry_end - retry_start, 3)}s)")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_retry_one, item) for item in failed_items]
+            for future in as_completed(futures):
+                item, result, duration = future.result()
+                if result:
+                    fname = Path(item["output_path"]).stem
+                    d_id = int(fname.split("_")[1])
+                    audio_files[d_id] = item["output_path"]
+                    self._log(f"  ✅ Recovery succeeded: {fname} ({duration}s)")
+                else:
+                    still_failed.append(item)
+                    self._log(f"  ❌ Still failing: {item['text'][:50]}... ({duration}s)")
 
         if still_failed:
             with open(failed_path, "w", encoding="utf-8") as f:

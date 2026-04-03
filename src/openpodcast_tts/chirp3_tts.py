@@ -10,6 +10,7 @@ import json
 import hashlib
 import os
 import shutil
+import threading
 import time
 import wave
 from pathlib import Path
@@ -237,6 +238,7 @@ class Chirp3AudioCache:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.cache_dir / "cache_index.json"
         self.index = self._load_index()
+        self._lock = threading.Lock()
 
     def _load_index(self) -> dict:
         if self.index_path.exists():
@@ -253,28 +255,30 @@ class Chirp3AudioCache:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
     def get(self, text: str, voice_name: str) -> Path | None:
-        key = self.make_key(text, voice_name)
-        if key in self.index:
-            p = Path(self.index[key]["path"])
-            if p.exists() and p.stat().st_size > 1000:
-                return p
-            del self.index[key]
-            self._save_index()
-        return None
+        with self._lock:
+            key = self.make_key(text, voice_name)
+            if key in self.index:
+                p = Path(self.index[key]["path"])
+                if p.exists() and p.stat().st_size > 1000:
+                    return p
+                del self.index[key]
+                self._save_index()
+            return None
 
     def put(self, text: str, voice_name: str, wav_path: Path) -> Path:
-        key = self.make_key(text, voice_name)
-        cache_file = self.cache_dir / f"{key}.wav"
-        if wav_path != cache_file:
-            shutil.copy2(str(wav_path), str(cache_file))
-        self.index[key] = {
-            "path": str(cache_file),
-            "voice_name": voice_name,
-            "text": text[:80] + ("..." if len(text) > 80 else ""),
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        self._save_index()
-        return cache_file
+        with self._lock:
+            key = self.make_key(text, voice_name)
+            cache_file = self.cache_dir / f"{key}.wav"
+            if wav_path != cache_file:
+                shutil.copy2(str(wav_path), str(cache_file))
+            self.index[key] = {
+                "path": str(cache_file),
+                "voice_name": voice_name,
+                "text": text[:80] + ("..." if len(text) > 80 else ""),
+                "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            self._save_index()
+            return cache_file
 
     def stats(self) -> dict:
         total = len(self.index)
@@ -318,6 +322,7 @@ class Chirp3HDClient:
         self.hosts = hosts
         self.cache = Chirp3AudioCache(cache_dir=cache_dir)
         self.failed: list[dict] = []
+        self._failed_lock = threading.Lock()
 
         # Voice assignment
         self.assigner = Chirp3VoiceAssigner()
@@ -338,6 +343,7 @@ class Chirp3HDClient:
     ) -> Path | None:
         output_path = Path(output_path)
         voice_cfg = self.voice_map[speaker]
+        tag = output_path.stem  # e.g. "d_0042"
 
         # Check cache
         cached = self.cache.get(text, voice_cfg.voice_name)
@@ -345,14 +351,14 @@ class Chirp3HDClient:
             if cached != output_path:
                 shutil.copy2(str(cached), str(output_path))
             key = self.cache.make_key(text, voice_cfg.voice_name)
-            print(f"    ♻️  Cache hit: {key}")
+            print(f"    ♻️  [{tag}] Cache hit: {key}")
             return output_path
 
         # Prepare text — use SSML only when needed
         processed, is_ssml = prepare_text(text)
 
         if not processed or processed == "..." or len(processed) < 2:
-            print(f"    ⏭️  Skipping empty text: '{text[:30]}...'")
+            print(f"    ⏭️  [{tag}] Skipping empty text: '{text[:30]}...'")
             return None
 
         # Select SSML or plain text
@@ -398,29 +404,31 @@ class Chirp3HDClient:
                 if is_retryable:
                     wait = min(5 * (2 ** (attempt - 1)), 60) + attempt
                     print(
-                        f"    🔄 Cloud TTS error (attempt {attempt}/{self.MAX_RETRIES}): "
+                        f"    🔄 [{tag}] Cloud TTS error (attempt {attempt}/{self.MAX_RETRIES}): "
                         f"{error_str[:80]}. Waiting {wait:.0f}s..."
                     )
                     time.sleep(wait)
                 else:
-                    print(f"    ❌ Non-retryable error: {e}")
-                    self.failed.append({
-                        "text": text, "processed": processed,
-                        "is_ssml": is_ssml, "speaker": speaker,
-                        "voice_name": voice_cfg.voice_name,
-                        "output_path": str(output_path),
-                        "error": str(e),
-                    })
+                    print(f"    ❌ [{tag}] Non-retryable error: {e}")
+                    with self._failed_lock:
+                        self.failed.append({
+                            "text": text, "processed": processed,
+                            "is_ssml": is_ssml, "speaker": speaker,
+                            "voice_name": voice_cfg.voice_name,
+                            "output_path": str(output_path),
+                            "error": str(e),
+                        })
                     return None
 
-        print(f"    ❌ All {self.MAX_RETRIES} retries exhausted. Skipping.")
-        self.failed.append({
-            "text": text, "processed": processed,
-            "is_ssml": is_ssml, "speaker": speaker,
-            "voice_name": voice_cfg.voice_name,
-            "output_path": str(output_path),
-            "error": str(last_error),
-        })
+        print(f"    ❌ [{tag}] All {self.MAX_RETRIES} retries exhausted. Skipping.")
+        with self._failed_lock:
+            self.failed.append({
+                "text": text, "processed": processed,
+                "is_ssml": is_ssml, "speaker": speaker,
+                "voice_name": voice_cfg.voice_name,
+                "output_path": str(output_path),
+                "error": str(last_error),
+            })
         return None
 
     def save_failed_log(self, path: str | Path = "./tts_cache/failed.json"):

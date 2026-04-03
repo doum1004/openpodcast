@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import wave
 from pathlib import Path
@@ -13,6 +14,87 @@ from google import genai
 from google.genai import types
 
 load_dotenv()
+
+
+# ============================================
+# Text cleaning for TTS
+# ============================================
+
+# Korean digit words → Arabic digits
+_KR_DIGITS = {"영": 0, "일": 1, "이": 2, "삼": 3, "사": 4,
+              "오": 5, "육": 6, "칠": 7, "팔": 8, "구": 9}
+_KR_UNITS = {"십": 10, "백": 100, "천": 1000}
+# Must contain at least one unit (십/백/천) to avoid matching normal words like 사실, 이건
+_KR_NUM_PATTERN = re.compile(
+    r'([영일이삼사오육칠팔구]*[십백천][영일이삼사오육칠팔구십백천]*)'
+)
+
+
+def _kr_word_to_number(word: str) -> int | None:
+    """Convert a Korean number word like '팔십사' to 84."""
+    result = 0
+    current = 0
+    for ch in word:
+        if ch in _KR_DIGITS:
+            current = _KR_DIGITS[ch]
+        elif ch in _KR_UNITS:
+            if current == 0:
+                current = 1
+            result += current * _KR_UNITS[ch]
+            current = 0
+        else:
+            return None  # not a pure number word
+    result += current
+    return result if result > 0 else None
+
+
+def _convert_kr_numbers(text: str) -> str:
+    """Replace Korean number words (containing 십/백/천) with Arabic digits."""
+    def _replace(m):
+        word = m.group(1)
+        num = _kr_word_to_number(word)
+        if num is not None:
+            return str(num)
+        return m.group(0)
+    return _KR_NUM_PATTERN.sub(_replace, text)
+
+
+def clean_text_for_tts1(text: str) -> str:
+    # Convert Korean number words → digits
+    text = _convert_kr_numbers(text)
+
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    if not text:
+        text = "..."
+    return text
+
+def clean_text_for_tts2(text: str) -> str:
+    """
+    Clean text before sending to TTS.
+    - Remove stage directions in parentheses/brackets
+    - Convert Korean number words to digits
+    - Strip leading ellipsis
+    """
+    # Remove parenthetical directives: (침묵), (음...), [laughter], etc.
+    text = re.sub(r'\([^)]*\)', '', text)
+    text = re.sub(r'\[[^\]]*\]', '', text)
+    text = re.sub(r'\{[^}]*\}', '', text)
+
+    # Strip leading ellipsis/dots
+    text = re.sub(r'^[.\s…]+', '', text)
+
+    # Convert Korean number words → digits
+    text = _convert_kr_numbers(text)
+
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    if not text:
+        text = "..."
+    return text
+
 
 class EmptyResponseError(Exception):
     pass
@@ -62,6 +144,7 @@ ROLE_VOICE_PREFERENCE = {
 RETRYABLE_ERRORS = [
     "429", "500", "503",
     "RESOURCE_EXHAUSTED", "INTERNAL", "UNAVAILABLE",
+    "only be used for TTS",
 ]
 
 
@@ -180,6 +263,7 @@ class AudioCache:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.cache_dir / "cache_index.json"
         self.index: dict[str, dict] = self._load_index()
+        self._lock = threading.Lock()
 
     def _load_index(self) -> dict:
         if self.index_path.exists():
@@ -197,30 +281,32 @@ class AudioCache:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
     def get(self, text: str, voice_name: str, emotion: str) -> Path | None:
-        key = self.make_key(text, voice_name, emotion)
-        if key in self.index:
-            cached_path = Path(self.index[key]["path"])
-            if cached_path.exists() and cached_path.stat().st_size > 1000:
-                return cached_path
-            else:
-                del self.index[key]
-                self._save_index()
-        return None
+        with self._lock:
+            key = self.make_key(text, voice_name, emotion)
+            if key in self.index:
+                cached_path = Path(self.index[key]["path"])
+                if cached_path.exists() and cached_path.stat().st_size > 1000:
+                    return cached_path
+                else:
+                    del self.index[key]
+                    self._save_index()
+            return None
 
     def put(self, text: str, voice_name: str, emotion: str, wav_path: Path) -> Path:
-        key = self.make_key(text, voice_name, emotion)
-        cache_file = self.cache_dir / f"{key}.wav"
-        if wav_path != cache_file:
-            shutil.copy2(str(wav_path), str(cache_file))
-        self.index[key] = {
-            "path": str(cache_file),
-            "voice_name": voice_name,
-            "emotion": emotion,
-            "text": text[:80] + ("..." if len(text) > 80 else ""),
-            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        self._save_index()
-        return cache_file
+        with self._lock:
+            key = self.make_key(text, voice_name, emotion)
+            cache_file = self.cache_dir / f"{key}.wav"
+            if wav_path != cache_file:
+                shutil.copy2(str(wav_path), str(cache_file))
+            self.index[key] = {
+                "path": str(cache_file),
+                "voice_name": voice_name,
+                "emotion": emotion,
+                "text": text[:80] + ("..." if len(text) > 80 else ""),
+                "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            self._save_index()
+            return cache_file
 
     def stats(self) -> dict:
         total = len(self.index)
@@ -242,21 +328,23 @@ class RateLimiter:
         self.max_retries = max_retries
         self.request_times: list[float] = []
         self.min_interval = 60.0 / max_per_minute
+        self._lock = threading.Lock()
 
     def wait_if_needed(self):
-        now = time.time()
-        self.request_times = [t for t in self.request_times if now - t < 60.0]
-        if len(self.request_times) >= self.max_per_minute:
-            oldest = self.request_times[0]
-            wait_time = 60.0 - (now - oldest) + 1.0
-            if wait_time > 0:
-                print(f"    ⏳ Per-minute limit reached. Waiting {wait_time:.1f}s...")
-                time.sleep(wait_time)
-        if self.request_times:
-            elapsed = time.time() - self.request_times[-1]
-            if elapsed < self.min_interval:
-                time.sleep(self.min_interval - elapsed)
-        self.request_times.append(time.time())
+        with self._lock:
+            now = time.time()
+            self.request_times = [t for t in self.request_times if now - t < 60.0]
+            if len(self.request_times) >= self.max_per_minute:
+                oldest = self.request_times[0]
+                wait_time = 60.0 - (now - oldest) + 1.0
+                if wait_time > 0:
+                    print(f"    ⏳ Per-minute limit reached. Waiting {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+            if self.request_times:
+                elapsed = time.time() - self.request_times[-1]
+                if elapsed < self.min_interval:
+                    time.sleep(self.min_interval - elapsed)
+            self.request_times.append(time.time())
 
     def parse_retry_delay(self, error_message: str) -> float:
         match = re.search(r'retry in (\d+\.?\d*)s', str(error_message))
@@ -303,6 +391,7 @@ class GeminiTTSClient:
         self.rate_limiter = RateLimiter(max_per_minute=9, max_retries=8)
         self.cache = AudioCache(cache_dir=cache_dir)
         self.failed: list[dict] = []
+        self._failed_lock = threading.Lock()
 
         # Gender-based automatic voice assignment
         self.assigner = VoiceAssigner()
@@ -326,13 +415,12 @@ class GeminiTTSClient:
             )
         return self.voice_map[speaker]
 
-    def _build_prompt(self, text: str, speaker: str, emotion: str) -> str:
-        """
-        Build TTS prompt using the Korean emotion tag directly.
-        """
-        if emotion:
-            return f"{emotion} 다음을 말하세요: {text}"
-        return text
+    def _build_prompt(self, text: str, speaker: str, emotion: str, attempt: int = 1) -> str:
+        if attempt <= 2:
+            return text
+        if attempt <= 4:
+            return clean_text_for_tts1(text)
+        return clean_text_for_tts2(text)
 
     def synthesize(
         self,
@@ -343,6 +431,7 @@ class GeminiTTSClient:
     ) -> Path | None:
         output_path = Path(output_path)
         voice_cfg = self._get_voice(speaker)
+        tag = output_path.stem  # e.g. "d_0042"
 
         # 1. Check cache (based on actual voice_name)
         cached = self.cache.get(text, voice_cfg.voice_name, emotion)
@@ -350,22 +439,23 @@ class GeminiTTSClient:
             if cached != output_path:
                 shutil.copy2(str(cached), str(output_path))
             key_short = self.cache.make_key(text, voice_cfg.voice_name, emotion)[:8]
-            print(f"    ♻️  Cache hit: {key_short}...")
+            print(f"    ♻️  [{tag}] Cache hit: {key_short}...")
             return output_path
-
-        # 2. Build prompt
-        prompt = self._build_prompt(text, speaker, emotion)
 
         last_error = None
 
         for attempt in range(1, self.rate_limiter.max_retries + 1):
             try:
+                # Rebuild prompt each attempt — varies on empty-response retries
+                prompt = self._build_prompt(text, speaker, emotion, attempt)
+
                 self.rate_limiter.wait_if_needed()
 
                 response = self.client.models.generate_content(
                     model=self.model,
                     contents=prompt,
                     config=types.GenerateContentConfig(
+                        seed=1234 + attempt - 1,
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(
                             voice_config=types.VoiceConfig(
@@ -404,8 +494,9 @@ class GeminiTTSClient:
                 last_error = e
                 wait = min(5 * (2 ** (attempt - 1)), 60) + attempt
                 print(
-                    f"    🔄 Empty/parse error (attempt {attempt}/"
+                    f"    🔄 [{tag}] Empty/parse error (attempt {attempt}/"
                     f"{self.rate_limiter.max_retries}): {e}. "
+                    f"Prompt: {prompt[:50]}... "
                     f"Waiting {wait:.0f}s..."
                 )
                 time.sleep(wait)
@@ -425,30 +516,32 @@ class GeminiTTSClient:
 
                     wait = base_delay + attempt
                     print(
-                        f"    🔄 {error_type} (attempt {attempt}/"
+                        f"    🔄 [{tag}] {error_type} (attempt {attempt}/"
                         f"{self.rate_limiter.max_retries}). "
                         f"Waiting {wait:.0f}s..."
                     )
                     time.sleep(wait)
                 else:
-                    print(f"    ❌ Non-retryable error: {e}")
-                    self.failed.append({
-                        "text": text, "speaker": speaker,
-                        "voice_name": voice_cfg.voice_name,
-                        "emotion": emotion,
-                        "output_path": str(output_path),
-                        "error": str(e),
-                    })
+                    print(f"    ❌ [{tag}] Non-retryable error: {e}")
+                    with self._failed_lock:
+                        self.failed.append({
+                            "text": text, "speaker": speaker,
+                            "voice_name": voice_cfg.voice_name,
+                            "emotion": emotion,
+                            "output_path": str(output_path),
+                            "error": str(e),
+                        })
                     return None
 
-        print(f"    ❌ All {self.rate_limiter.max_retries} retries exhausted. Skipping.")
-        self.failed.append({
-            "text": text, "speaker": speaker,
-            "voice_name": voice_cfg.voice_name,
-            "emotion": emotion,
-            "output_path": str(output_path),
-            "error": str(last_error),
-        })
+        print(f"    ❌ [{tag}] All {self.rate_limiter.max_retries} retries exhausted. Skipping.")
+        with self._failed_lock:
+            self.failed.append({
+                "text": text, "speaker": speaker,
+                "voice_name": voice_cfg.voice_name,
+                "emotion": emotion,
+                "output_path": str(output_path),
+                "error": str(last_error),
+            })
         return None
 
     def save_failed_log(self, path: str | Path = "./tts_cache/failed.json"):
