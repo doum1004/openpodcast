@@ -119,6 +119,13 @@ class OpenpodcastTTS:
             self.podcast.get("background_image")
         )
 
+        # Resolve host image paths relative to JSON file location
+        for host in self.hosts:
+            if host.get("image"):
+                resolved = self._resolve_asset_path(host["image"])
+                if resolved:
+                    host["image"] = str(resolved)
+
         # Use different client based on tts engine
         self.tts = create_tts_client(
             hosts=self.hosts,
