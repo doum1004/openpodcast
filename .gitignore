@@ -15,5 +15,4 @@ envs
 .env.*
 !.env.example
 
-samples/
 output/

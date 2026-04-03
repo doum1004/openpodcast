@@ -1,0 +1,3 @@
+[submodule "samples"]
+	path = samples
+	url = git@github.com:doum1004/openpodcast_samples.git
