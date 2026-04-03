@@ -106,12 +106,15 @@ class OpenpodcastTTS:
         self.tts = tts
         print(f"Initialized OpenpodcastTTS with engine: {ENGINE_LABELS.get(tts, tts)}")
 
-        # Resolve intro/outro music paths relative to JSON file location
-        self.intro_music_path = self._resolve_music_path(
+        # Resolve intro/outro music and background image paths relative to JSON file location
+        self.intro_music_path = self._resolve_asset_path(
             self.podcast.get("intro_music")
         )
-        self.outro_music_path = self._resolve_music_path(
+        self.outro_music_path = self._resolve_asset_path(
             self.podcast.get("outro_music")
+        )
+        self.background_image_path = self._resolve_asset_path(
+            self.podcast.get("background_image")
         )
 
         # Use different client based on tts engine
@@ -130,7 +133,7 @@ class OpenpodcastTTS:
                 "show_name": self.podcast.get("show_name", ""),
                 "title": self.podcast.get("title", ""),
                 "heat_level": self.podcast.get("heat_level", ""),
-                "background_image": self.podcast.get("background_image", ""),
+                "background_image": str(self.background_image_path) if self.background_image_path else None,
                 "total_dialogues": len(self.all_dialogues),
                 "intro_music": str(self.intro_music_path) if self.intro_music_path else None,
                 "outro_music": str(self.outro_music_path) if self.outro_music_path else None,
@@ -141,18 +144,18 @@ class OpenpodcastTTS:
             "console_output": [],
         }
 
-    def _resolve_music_path(self, music_filename: str | None) -> Path | None:
-        """Resolve a music filename to a full path.
+    def _resolve_asset_path(self, filename: str | None) -> Path | None:
+        """Resolve an asset filename to a full path.
 
         Searches in order:
         1. As an absolute path or relative to CWD
         2. Relative to the JSON file's directory
         3. Relative to the output directory
         """
-        if not music_filename:
+        if not filename:
             return None
 
-        candidate = Path(music_filename)
+        candidate = Path(filename)
         if candidate.is_absolute() and candidate.exists():
             return candidate
 
@@ -161,12 +164,12 @@ class OpenpodcastTTS:
             return candidate.resolve()
 
         # Relative to JSON directory
-        json_relative = self.json_dir / music_filename
+        json_relative = self.json_dir / filename
         if json_relative.exists():
             return json_relative.resolve()
 
         # Relative to output directory
-        output_relative = self.output_dir / music_filename
+        output_relative = self.output_dir / filename
         if output_relative.exists():
             return output_relative.resolve()
 
