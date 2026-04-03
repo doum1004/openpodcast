@@ -89,6 +89,8 @@ class OpenpodcastTTS:
         self.json_dir = Path(json_path).parent
         self.output_dir = Path(output_dir) / json_path_base_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.tts_dir = self.output_dir / "tts"
+        self.tts_dir.mkdir(parents=True, exist_ok=True)
 
         with open(json_path, "r", encoding="utf-8") as f:
             self.data = json.load(f)
@@ -275,7 +277,7 @@ class OpenpodcastTTS:
             emotion = d["emotion"]
             interrupt = d["interrupt_type"]
 
-            output_path = self.output_dir / f"d_{d_id:04d}.wav"
+            output_path = self.tts_dir / f"d_{d_id:04d}.wav"
 
             script_start = time.time()
 
@@ -897,7 +899,7 @@ def main():
         if recovered:
             all_audio = {}
             for d in pipeline.all_dialogues:
-                wav = pipeline.output_dir / f"d_{d['id']:04d}.wav"
+                wav = pipeline.tts_dir / f"d_{d['id']:04d}.wav"
                 if wav.exists() and wav.stat().st_size > 1000:
                     all_audio[d["id"]] = str(wav)
             timeline = pipeline.build_timeline(all_audio)
