@@ -28,9 +28,10 @@ class GeminiVoiceConfig:
 AVAILABLE_VOICES = {
     "male": [
         GeminiVoiceConfig("Achird",  "ko-KR", "Calm and low male voice"),
-        GeminiVoiceConfig("Charon",  "ko-KR", "Energetic male voice"),
-        GeminiVoiceConfig("Fenrir",  "ko-KR", "Deep and weighty male voice"),
-        GeminiVoiceConfig("Orus",    "ko-KR", "Bright and friendly male voice"),
+        GeminiVoiceConfig("Algenib",  "ko-KR", "Deep and weighty male"),
+        GeminiVoiceConfig("Algieba",  "ko-KR", "Warm and friendly male"),
+        GeminiVoiceConfig("Alnilam",  "ko-KR", "Energetic male"),
+        GeminiVoiceConfig("Schedar",    "ko-KR", "Soft and stable male"),
     ],
     "female": [
         GeminiVoiceConfig("Kore",    "ko-KR", "Bright and articulate female voice"),
@@ -42,11 +43,11 @@ AVAILABLE_VOICES = {
 
 ROLE_VOICE_PREFERENCE = {
     "male": {
-        "host":     ["Achird", "Orus", "Charon", "Fenrir"],
-        "analyst":  ["Fenrir", "Achird", "Orus", "Charon"],
-        "debater":  ["Charon", "Fenrir", "Orus", "Achird"],
-        "mediator": ["Orus", "Achird", "Charon", "Fenrir"],
-        "default":  ["Achird", "Charon", "Fenrir", "Orus"],
+        "host":     ["Achird", "Schedar", "Algieba", "Algenib"],
+        "analyst":  ["Algenib", "Achird", "Alnilam", "Algieba"],
+        "debater":  ["Alnilam", "Algenib", "Algieba", "Achird"],
+        "mediator": ["Algieba", "Schedar", "Achird", "Algenib"],
+        "default":  ["Schedar", "Achird", "Algieba", "Algenib", "Alnilam"],
     },
     "female": {
         "host":     ["Leda", "Aoede", "Kore", "Zephyr"],
@@ -57,51 +58,6 @@ ROLE_VOICE_PREFERENCE = {
     },
 }
 
-# NOTE: These emotion prompts are in Korean because the TTS model generates
-# Korean speech. Keeping them in Korean produces better prosody and expression.
-EMOTION_PROMPTS = {
-    "neutral":     "",
-    "excited":     "매우 흥분하고 열정적인 톤으로",
-    "passionate":  "열정적이고 확신에 찬 톤으로",
-    "curious":     "호기심 가득한 톤으로",
-    "skeptical":   "의심스럽고 회의적인 톤으로",
-    "frustrated":  "답답하고 짜증스러운 톤으로",
-    "amused":      "재미있어하며 웃음이 섞인 톤으로",
-    "sarcastic":   "비꼬는 듯한 톤으로",
-    "defensive":   "방어적이고 단호한 톤으로",
-    "aggressive":  "공격적이고 강한 톤으로",
-    "reflective":  "차분하고 사려 깊은 톤으로",
-    "surprised":   "놀란 톤으로",
-    "dismissive":  "무시하는 듯한 톤으로",
-    "empathetic":  "공감하는 따뜻한 톤으로",
-    "triumphant":  "승리감에 찬 톤으로",
-    "conceding":   "인정하며 양보하는 톤으로",
-    "warm":        "따뜻하고 친근한 톤으로",
-    "teasing":     "놀리는 듯한 장난스러운 톤으로",
-}
-
-# NOTE: HD emotion prompts are in Korean for the same reason — they are
-# instructions to the Korean TTS model for natural prosody.
-EMOTION_PROMPTS_HD = {
-    "neutral":     "자연스럽고 편안한 톤으로",
-    "excited":     "정말 흥분되어서 목소리가 높아지고 빠르게, 열정이 넘치는 톤으로",
-    "passionate":  "깊은 확신을 가지고 힘차게, 청중을 설득하듯이",
-    "curious":     "고개를 갸웃거리며 정말 궁금해하는 듯한 톤으로, 약간 올라가는 억양으로",
-    "skeptical":   "눈을 가늘게 뜨고 정말 의심스럽다는 듯이, 천천히 따져묻듯이",
-    "frustrated":  "답답해서 한숨이 나오는 듯한 톤으로, 약간 짜증이 섞인 목소리로",
-    "amused":      "웃음이 터지기 직전인 것처럼, 즐거워하며 가볍게",
-    "sarcastic":   "비꼬는 듯한 톤으로, 약간 느리게 강조하면서",
-    "defensive":   "자기 입장을 지키려고 단호하게, 약간 긴장된 톤으로",
-    "aggressive":  "강하게 밀어붙이듯이, 목소리에 힘을 주고 빠르게",
-    "reflective":  "깊이 생각하면서 천천히, 사려 깊고 차분한 톤으로",
-    "surprised":   "정말 놀라서 눈이 커진 것처럼, 갑자기 목소리가 높아지며",
-    "dismissive":  "별것 아니라는 듯이 가볍게 무시하는 톤으로",
-    "empathetic":  "상대방의 마음을 이해하며 따뜻하고 부드럽게",
-    "triumphant":  "이겼다는 듯이 자신만만하게, 승리감에 찬 톤으로",
-    "conceding":   "인정하며 약간 아쉬운 듯이, 양보하는 부드러운 톤으로",
-    "warm":        "따뜻한 미소가 느껴지는 친근하고 포근한 톤으로",
-    "teasing":     "장난스럽게 놀리듯이, 웃음이 섞인 가벼운 톤으로",
-}
 
 RETRYABLE_ERRORS = [
     "429", "500", "503",
@@ -235,13 +191,13 @@ class AudioCache:
         with open(self.index_path, "w", encoding="utf-8") as f:
             json.dump(self.index, f, ensure_ascii=False, indent=2)
 
-    def make_key(self, text: str, voice_name: str, emotion: str, quality: str) -> str:
-        """Hash from text + actual voice name + emotion + quality"""
-        content = f"{quality}|{voice_name}|{emotion}|{text}"
+    def make_key(self, text: str, voice_name: str, emotion: str) -> str:
+        """Hash from text + actual voice name + emotion"""
+        content = f"{voice_name}|{emotion}|{text}"
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
-    def get(self, text: str, voice_name: str, emotion: str, quality: str) -> Path | None:
-        key = self.make_key(text, voice_name, emotion, quality)
+    def get(self, text: str, voice_name: str, emotion: str) -> Path | None:
+        key = self.make_key(text, voice_name, emotion)
         if key in self.index:
             cached_path = Path(self.index[key]["path"])
             if cached_path.exists() and cached_path.stat().st_size > 1000:
@@ -251,8 +207,8 @@ class AudioCache:
                 self._save_index()
         return None
 
-    def put(self, text: str, voice_name: str, emotion: str, quality: str, wav_path: Path) -> Path:
-        key = self.make_key(text, voice_name, emotion, quality)
+    def put(self, text: str, voice_name: str, emotion: str, wav_path: Path) -> Path:
+        key = self.make_key(text, voice_name, emotion)
         cache_file = self.cache_dir / f"{key}.wav"
         if wav_path != cache_file:
             shutil.copy2(str(wav_path), str(cache_file))
@@ -260,7 +216,6 @@ class AudioCache:
             "path": str(cache_file),
             "voice_name": voice_name,
             "emotion": emotion,
-            "quality": quality,
             "text": text[:80] + ("..." if len(text) > 80 else ""),
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -325,14 +280,12 @@ class GeminiTTSClient:
         hosts: dict,
         api_key: str | None = None,
         cache_dir: str | Path = "./tts_cache",
-        quality: str = "standard",
     ):
         """
         Args:
             hosts: podcast.hosts dict from JSON
             api_key: Google AI API key
             cache_dir: Cache directory
-            quality: "standard" or "hd"
         """
         resolved_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not resolved_key:
@@ -343,7 +296,6 @@ class GeminiTTSClient:
                 "  3. Pass directly: GeminiTTSClient(api_key='...')"
             )
 
-        self.quality = quality or os.getenv("TTS_QUALITY", "standard")
         self.model = "gemini-2.5-flash-preview-tts"
         self.hosts = hosts
 
@@ -358,7 +310,6 @@ class GeminiTTSClient:
 
         cache_stats = self.cache.stats()
         print(f"🔑 API key loaded (last 4: ...{resolved_key[-4:]})")
-        print(f"🎚️  Quality: {'HD' if self.quality == 'hd' else 'Standard'}")
         print(f"🤖 Model: {self.model}")
         print(
             f"📦 Cache: {cache_stats['entries']} entries, "
@@ -375,56 +326,13 @@ class GeminiTTSClient:
             )
         return self.voice_map[speaker]
 
-    def _get_host_info(self, speaker: str) -> dict:
-        """Look up host info (supports both list and dict)"""
-        if isinstance(self.hosts, list):
-            for h in self.hosts:
-                if h.get("id") == speaker:
-                    return h
-            return {}
-        else:
-            return self.hosts.get(speaker, {})
-
     def _build_prompt(self, text: str, speaker: str, emotion: str) -> str:
         """
-        Build TTS prompt.
-        NOTE: Prompt text is in Korean because the TTS model generates Korean speech.
-        Korean prompts produce better prosody and emotional expression.
+        Build TTS prompt using the Korean emotion tag directly.
         """
-        host_info = self._get_host_info(speaker)
-        name = host_info.get("name", speaker)
-
-        if self.quality == "hd":
-            gender_word = "남성" if host_info.get("gender") == "male" else "여성"
-            role = host_info.get("role", "패널")
-            personality = host_info.get("personality", "")
-            debate_style = host_info.get("debate_style", "")
-            expertise = ", ".join(host_info.get("expertise", []))
-
-            parts = []
-
-            # Character description
-            char_desc = f"당신은 '{name}'입니다. {gender_word} {role}."
-            if debate_style:
-                char_desc += f" 토론 스타일: {debate_style}."
-            if expertise:
-                char_desc += f" 전문 분야: {expertise}."
-            if personality:
-                char_desc += f" {personality}"
-            parts.append(char_desc)
-
-            # Emotion
-            emotion_instruction = EMOTION_PROMPTS_HD.get(emotion, "")
-            if emotion_instruction:
-                parts.append(f"다음 대사를 {emotion_instruction} 말하세요.")
-
-            parts.append(f'대사: "{text}"')
-            return "\n".join(parts)
-        else:
-            emotion_instruction = EMOTION_PROMPTS.get(emotion, "")
-            if emotion_instruction:
-                return f"{emotion_instruction} 다음을 말하세요: {text}"
-            return text
+        if emotion:
+            return f"{emotion} 다음을 말하세요: {text}"
+        return text
 
     def synthesize(
         self,
@@ -437,11 +345,11 @@ class GeminiTTSClient:
         voice_cfg = self._get_voice(speaker)
 
         # 1. Check cache (based on actual voice_name)
-        cached = self.cache.get(text, voice_cfg.voice_name, emotion, self.quality)
+        cached = self.cache.get(text, voice_cfg.voice_name, emotion)
         if cached:
             if cached != output_path:
                 shutil.copy2(str(cached), str(output_path))
-            key_short = self.cache.make_key(text, voice_cfg.voice_name, emotion, self.quality)[:8]
+            key_short = self.cache.make_key(text, voice_cfg.voice_name, emotion)[:8]
             print(f"    ♻️  Cache hit: {key_short}...")
             return output_path
 
@@ -489,7 +397,7 @@ class GeminiTTSClient:
                     raise EmptyResponseError(f"Audio too small ({len(audio_data)}B)")
 
                 self._save_wav(audio_data, output_path)
-                self.cache.put(text, voice_cfg.voice_name, emotion, self.quality, output_path)
+                self.cache.put(text, voice_cfg.voice_name, emotion, output_path)
                 return output_path
 
             except (EmptyResponseError, AttributeError, TypeError, IndexError) as e:
@@ -527,7 +435,7 @@ class GeminiTTSClient:
                     self.failed.append({
                         "text": text, "speaker": speaker,
                         "voice_name": voice_cfg.voice_name,
-                        "emotion": emotion, "quality": self.quality,
+                        "emotion": emotion,
                         "output_path": str(output_path),
                         "error": str(e),
                     })
@@ -537,7 +445,7 @@ class GeminiTTSClient:
         self.failed.append({
             "text": text, "speaker": speaker,
             "voice_name": voice_cfg.voice_name,
-            "emotion": emotion, "quality": self.quality,
+            "emotion": emotion,
             "output_path": str(output_path),
             "error": str(last_error),
         })

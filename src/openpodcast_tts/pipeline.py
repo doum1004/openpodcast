@@ -36,7 +36,6 @@ def create_tts_client(hosts, api_key=None, tts="hd", cache_dir="./tts_cache"):
             hosts=hosts,
             api_key=api_key,
             cache_dir=cache_dir,
-            quality="standard",
         )
 
 
