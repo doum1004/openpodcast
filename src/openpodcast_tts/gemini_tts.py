@@ -416,11 +416,13 @@ class GeminiTTSClient:
         return self.voice_map[speaker]
 
     def _build_prompt(self, text: str, speaker: str, emotion: str, attempt: int = 1) -> str:
-        if attempt <= 2:
-            return text
-        if attempt <= 4:
-            return clean_text_for_tts1(text)
-        return clean_text_for_tts2(text)
+        # Apply progressively more aggressive text cleaning on retries
+        if attempt >= 3:
+            text = clean_text_for_tts2(text)
+        elif attempt >= 2:
+            text = clean_text_for_tts1(text)
+        # Always prefix with TTS instruction to prevent "model tried to generate text" errors
+        return f"Read the following text aloud:\n{text}"
 
     def synthesize(
         self,
