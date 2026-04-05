@@ -519,6 +519,7 @@ class GeminiTTSClient:
                         f"    🔄 [{tag}] {error_type} (attempt {attempt}/"
                         f"{self.rate_limiter.max_retries}). "
                         f"Waiting {wait:.0f}s..."
+                        f"\n      Error: {e}"
                     )
                     time.sleep(wait)
                 else:
