@@ -1054,7 +1054,7 @@ def build_ffmpeg_command(
             safe_sec = dt_escape(sec.title)
             next_label = f"sec{i}"
             sec_fontsize = 40
-            sec_y = 90
+            sec_y = title_y + len(lines) * (title_fontsize + 10) + 10
             filters.append(
                 f"[{current_label}]drawtext=text='{safe_sec}'"
                 f":fontsize={sec_fontsize}:fontcolor=#00CCFF"
