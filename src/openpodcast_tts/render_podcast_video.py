@@ -166,7 +166,7 @@ def probe_audio_duration_ms(audio_path: str) -> Optional[int]:
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json",
              "-show_format", "-show_streams", audio_path],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
         )
         if result.returncode != 0:
             return None
@@ -350,7 +350,7 @@ def extract_highlight_audio(audio_path: str, highlight: HighlightInfo, output_pa
     end_sec = (highlight.end_ms + padding_ms) / 1000.0
     duration_sec = end_sec - start_sec
     cmd = ["ffmpeg", "-y", "-i", audio_path, "-ss", f"{start_sec:.3f}", "-t", f"{duration_sec:.3f}", "-c:a", "pcm_s16le", output_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if result.returncode != 0:
         print(f"    ❌ Audio extraction failed: {result.stderr[:300]}")
         return None
@@ -1161,7 +1161,7 @@ def build_audio_mix_if_needed(events, total_duration_ms, base_dir, output_path):
     filter_parts.append(f"{mix_inputs}amix=inputs={len(inputs)}:duration=longest[aout]")
     filter_str = ";".join(filter_parts)
     cmd = f'ffmpeg -y {" ".join(inputs)} -filter_complex "{filter_str}" -map "[aout]" -c:a aac -b:a 192k "{output_path}"'
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if result.returncode != 0:
         print(f"    ❌ Audio mix failed:\n{result.stderr[:500]}")
     else:
@@ -1266,7 +1266,7 @@ def render_highlight_clip(
             f.write(f"  [{i}] {part}\n")
 
     print(f"     🚀 Rendering...")
-    result = subprocess.run(cmd_list, capture_output=True, text=True)
+    result = subprocess.run(cmd_list, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
     if result.returncode == 0:
         size_mb = os.path.getsize(output_path) / (1024 * 1024)
@@ -1522,7 +1522,7 @@ def render_podcast_video(json_path: str, output_video: str = "", speed: float = 
     print(f"\n🚀 Rendering video → {output_video}")
     print(f"   This may take a while...")
 
-    result = subprocess.run(cmd_list, capture_output=True, text=True)
+    result = subprocess.run(cmd_list, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
     if result.returncode == 0:
         size_mb = os.path.getsize(output_video) / (1024 * 1024)
